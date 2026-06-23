@@ -1,4 +1,7 @@
-package com.krushna.flashflow.user;
+package com.krushna.flashflow.auth;
+
+import com.krushna.flashflow.user.User;
+import com.krushna.flashflow.user.UserRepository;
 
 import com.krushna.flashflow.config.JwtService;
 import lombok.RequiredArgsConstructor;

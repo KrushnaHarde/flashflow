@@ -1,4 +1,6 @@
-package com.krushna.flashflow.user;
+package com.krushna.flashflow.auth;
+
+import com.krushna.flashflow.user.User;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

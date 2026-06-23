@@ -1,4 +1,4 @@
-package com.krushna.flashflow.user;
+package com.krushna.flashflow.auth;
 
 public enum Role {
     USER,

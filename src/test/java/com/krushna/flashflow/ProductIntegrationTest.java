@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.krushna.flashflow.config.JwtService;
 import com.krushna.flashflow.inventory.Product;
 import com.krushna.flashflow.inventory.ProductRepository;
-import com.krushna.flashflow.user.Role;
+import com.krushna.flashflow.auth.Role;
 import com.krushna.flashflow.user.User;
 import com.krushna.flashflow.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;

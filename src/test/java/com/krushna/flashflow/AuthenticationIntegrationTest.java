@@ -1,13 +1,13 @@
 package com.krushna.flashflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.krushna.flashflow.user.AuthResponse;
-import com.krushna.flashflow.user.LoginRequest;
-import com.krushna.flashflow.user.RefreshRequest;
-import com.krushna.flashflow.user.RegisterRequest;
+import com.krushna.flashflow.auth.AuthResponse;
+import com.krushna.flashflow.auth.LoginRequest;
+import com.krushna.flashflow.auth.RefreshRequest;
+import com.krushna.flashflow.auth.RegisterRequest;
 import com.krushna.flashflow.user.User;
 import com.krushna.flashflow.user.UserRepository;
-import com.krushna.flashflow.user.Role;
+import com.krushna.flashflow.auth.Role;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

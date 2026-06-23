@@ -1,4 +1,4 @@
-package com.krushna.flashflow.user;
+package com.krushna.flashflow.auth;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;

@@ -1,4 +1,4 @@
-package com.krushna.flashflow.user;
+package com.krushna.flashflow.auth;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

@@ -1,4 +1,4 @@
-package com.krushna.flashflow.user;
+package com.krushna.flashflow.auth;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -9,8 +9,6 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class RegisterRequest {
-    private String name;
-    private String email;
-    private String password;
+public class RefreshRequest {
+    private String refreshToken;
 }

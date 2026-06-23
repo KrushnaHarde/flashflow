@@ -1,5 +1,7 @@
 package com.krushna.flashflow.user;
 
+import com.krushna.flashflow.auth.Role;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
