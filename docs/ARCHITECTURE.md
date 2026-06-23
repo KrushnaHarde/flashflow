@@ -28,7 +28,7 @@ graph TD
         Kafka --> PaymentProcessor[Payment Processing Worker]
     end
 ```
-
+![alt text](Architecture_diagram_2.png)
 ## Data Model Overview
 
 * **User**: Customer details.
