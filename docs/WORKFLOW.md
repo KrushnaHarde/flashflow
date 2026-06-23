@@ -43,3 +43,7 @@ sequenceDiagram
     Worker->>DB: Update Reservation (Status: CONFIRMED)
     Worker->>Kafka: Publish Event (PaymentPending)
 ```
+
+![alt text](Sequence_diagram.png)
+
+![alt text](Request_flow_diagram.png)
