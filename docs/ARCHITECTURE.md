@@ -29,6 +29,7 @@ graph TD
     end
 ```
 ![alt text](Architecture_diagram_2.png)
+
 ## Data Model Overview
 
 * **User**: Customer details.
@@ -39,3 +40,14 @@ graph TD
 * **Payment**: Transaction status for the order.
 * **Idempotency**: Tracking API requests to prevent duplicate processing.
 * **OutboxEvent**: Events waiting to be published to Kafka (Transactional Outbox Pattern).
+
+
+## Domain Class Diagram
+
+![alt text](flashflow_domain_class_diagram.png)
+
+## Sequence Diagram
+
+![alt text](Architecture_diagram.png)
+![diagram2](Sequence_diagram.png)
+
