@@ -45,7 +45,8 @@ public class AuthenticationIntegrationTest {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
 
     @MockitoBean
     private RedisConnectionFactory redisConnectionFactory;
@@ -236,11 +237,11 @@ public class AuthenticationIntegrationTest {
                         .content("{}"))
                 .andExpect(status().isForbidden());
 
-        // ADMIN accesses /admin/products -> Should NOT fail with 403 Forbidden (returns 404 since it's not implemented, but not 403/401)
+        // ADMIN accesses /admin/products -> Should NOT fail with 403 Forbidden
         int adminProductStatus = mockMvc.perform(post("/admin/products")
                         .header("Authorization", "Bearer " + adminTokens.getAccessToken())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{}"))
+                        .content("{\"name\":\"Test Product\",\"price\":10.0}"))
                 .andReturn().getResponse().getStatus();
         assertNotEquals(401, adminProductStatus);
         assertNotEquals(403, adminProductStatus);
