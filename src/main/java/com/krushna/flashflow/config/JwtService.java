@@ -16,7 +16,7 @@ import java.util.function.Function;
 public class JwtService {
 
     // Must be at least 256 bits (32 bytes)
-    private static final String SECRET_KEY = "mySecretKeyForFlashFlowWebSecurityApplicationMustBeLongEnoughToMeetRequirementsOf256Bits";
+    private static final String SECRET_KEY = "this_is#randomly$generated!sequence)of1characters&forStrong*jnc348yt87fbu39084cd98dry&^T%^$g2g2f";
     
     // Access token TTL: 1 hour in milliseconds
     private static final long ACCESS_TOKEN_EXPIRATION = 3600000;
