@@ -22,7 +22,7 @@ public class OutboxPublisherScheduler {
     @Value("${flashflow.outbox.max-retries:3}")
     private int maxRetries;
 
-    @Scheduled(fixedDelayString = "${flashflow.outbox.scheduler.interval:5000}")
+    @Scheduled(fixedDelayString = "${flashflow.outbox.relay-interval-ms:5000}")
     public void publishPendingEvents() {
         List<OutboxEvent> pendingEvents = outboxService.getPendingEvents();
         if (pendingEvents.isEmpty()) {
