@@ -33,3 +33,4 @@ build/
 .vscode/
 
 implementation_plan_by phase.md
+.env
