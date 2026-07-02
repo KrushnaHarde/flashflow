@@ -17,6 +17,8 @@ import com.krushna.flashflow.payment.Payment;
 import com.krushna.flashflow.payment.PaymentRepository;
 import com.krushna.flashflow.reservation.Reservation;
 import com.krushna.flashflow.reservation.ReservationRepository;
+import com.krushna.flashflow.reservation.ReservationStatus;
+import com.krushna.flashflow.payment.PaymentStatus;
 import com.krushna.flashflow.user.User;
 import com.krushna.flashflow.user.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -155,7 +157,7 @@ public class PurchaseIntegrationTest {
                 .description("Super rare shoe")
                 .coverImg("http://example.com/shoe.jpg")
                 .price(new BigDecimal("150.00"))
-                .status("ACTIVE")
+                .status(ProductStatus.ACTIVE)
                 .build();
         productRepository.save(activeProduct);
 
@@ -196,13 +198,13 @@ public class PurchaseIntegrationTest {
         );
 
         assertNotNull(response.getReservationId());
-        assertEquals("ACTIVE", response.getStatus());
+        assertEquals(ReservationStatus.ACTIVE.name(), response.getStatus());
         assertEquals(new BigDecimal("300.00"), response.getTotalAmount());
 
         // Verify Reservation database record exists and inventory is decremented
         Reservation reservation = reservationRepository.findById(response.getReservationId()).orElse(null);
         assertNotNull(reservation);
-        assertEquals("ACTIVE", reservation.getStatus());
+        assertEquals(ReservationStatus.ACTIVE, reservation.getStatus());
         assertEquals(2, reservation.getQuantity());
 
         Inventory updatedInventory = inventoryRepository.findById(activeProduct.getProductId()).orElse(null);
@@ -233,13 +235,13 @@ public class PurchaseIntegrationTest {
         assertEquals(1, orders.size());
         Order order = orders.get(0);
         assertEquals(response.getReservationId(), order.getReservationId());
-        assertEquals("CREATED", order.getStatus());
+        assertEquals(OrderStatus.CREATED, order.getStatus());
 
         List<Payment> payments = paymentRepository.findAll();
         assertEquals(1, payments.size());
         Payment payment = payments.get(0);
         assertEquals(order.getOrderId(), payment.getOrderId());
-        assertEquals("PENDING", payment.getStatus());
+        assertEquals(PaymentStatus.PENDING, payment.getStatus());
 
         List<OutboxEvent> outboxEvents = outboxEventRepository.findAll();
         assertEquals(1, outboxEvents.size());
@@ -254,12 +256,12 @@ public class PurchaseIntegrationTest {
         // DB Reservation status updated to CONFIRMED
         Reservation finalReservation = reservationRepository.findById(response.getReservationId()).orElse(null);
         assertNotNull(finalReservation);
-        assertEquals("CONFIRMED", finalReservation.getStatus());
+        assertEquals(ReservationStatus.CONFIRMED, finalReservation.getStatus());
 
         // DB Idempotency updated to COMPLETED
         Idempotency idempotency = idempotencyRepository.findById("idemp-key-1").orElse(null);
         assertNotNull(idempotency);
-        assertEquals("COMPLETED", idempotency.getStatus());
+        assertEquals(IdempotencyStatus.COMPLETED, idempotency.getStatus());
         assertEquals(order.getOrderId(), idempotency.getOrderId());
     }
 

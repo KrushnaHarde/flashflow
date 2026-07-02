@@ -8,6 +8,7 @@ import com.krushna.flashflow.inventory.Inventory;
 import com.krushna.flashflow.inventory.InventoryRepository;
 import com.krushna.flashflow.inventory.Product;
 import com.krushna.flashflow.inventory.ProductRepository;
+import com.krushna.flashflow.inventory.ProductStatus;
 import com.krushna.flashflow.inventory.redis.RedisInventoryService;
 import com.krushna.flashflow.user.User;
 import com.krushna.flashflow.user.UserRepository;
@@ -116,7 +117,7 @@ public class InventoryIntegrationTest {
                 .description("Latest smartphone")
                 .coverImg("http://example.com/phone.jpg")
                 .price(new BigDecimal("799.99"))
-                .status("ACTIVE")
+                .status(ProductStatus.ACTIVE)
                 .build();
         productRepository.save(activeProduct);
     }

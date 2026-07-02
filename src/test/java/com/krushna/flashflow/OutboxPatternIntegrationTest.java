@@ -8,11 +8,14 @@ import com.krushna.flashflow.inventory.redis.RedisInventoryService;
 import com.krushna.flashflow.inventory.redis.RedisReservationService;
 import com.krushna.flashflow.order.Order;
 import com.krushna.flashflow.order.OrderRepository;
+import com.krushna.flashflow.order.OrderStatus;
 import com.krushna.flashflow.payment.Payment;
 import com.krushna.flashflow.payment.PaymentRepository;
+import com.krushna.flashflow.payment.PaymentStatus;
 import com.krushna.flashflow.payment.kafka.PaymentRequestedConsumer;
 import com.krushna.flashflow.reservation.Reservation;
 import com.krushna.flashflow.reservation.ReservationRepository;
+import com.krushna.flashflow.reservation.ReservationStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -109,7 +112,7 @@ public class OutboxPatternIntegrationTest {
                 .quantity(2)
                 .unitPrice(new BigDecimal("150.00"))
                 .totalAmount(new BigDecimal("300.00"))
-                .status("CREATED")
+                .status(OrderStatus.CREATED)
                 .build();
         
         orderRepository.save(order);
@@ -118,7 +121,7 @@ public class OutboxPatternIntegrationTest {
                 .paymentId(UUID.randomUUID())
                 .orderId(orderId)
                 .amount(new BigDecimal("300.00"))
-                .status("PENDING")
+                .status(PaymentStatus.PENDING)
                 .build();
         
         paymentRepository.save(payment);
@@ -129,7 +132,7 @@ public class OutboxPatternIntegrationTest {
                 .aggregateId(orderId)
                 .eventType("ORDER_CREATED")
                 .payload(objectMapper.writeValueAsString(order))
-                .status("PENDING")
+                .status(OutboxStatus.PENDING)
                 .retryCount(0)
                 .build();
         
@@ -141,7 +144,7 @@ public class OutboxPatternIntegrationTest {
         // Assert outbox is marked SENT and published to Kafka
         OutboxEvent processedEvent = outboxEventRepository.findById(outboxEvent.getEventId()).orElse(null);
         assertNotNull(processedEvent);
-        assertEquals("SENT", processedEvent.getStatus());
+        assertEquals(OutboxStatus.SENT, processedEvent.getStatus());
         verify(mockKafkaTemplate).send(eq("flashflow.payments"), eq(orderId.toString()), anyString());
 
         // 2. Simulate consumer processing
@@ -150,11 +153,11 @@ public class OutboxPatternIntegrationTest {
         // Assert updates in DB
         Payment finalPayment = paymentRepository.findById(payment.getPaymentId()).orElse(null);
         assertNotNull(finalPayment);
-        assertEquals("SUCCESS", finalPayment.getStatus());
+        assertEquals(PaymentStatus.SUCCESS, finalPayment.getStatus());
 
         Order finalOrder = orderRepository.findById(orderId).orElse(null);
         assertNotNull(finalOrder);
-        assertEquals("CONFIRMED", finalOrder.getStatus());
+        assertEquals(OrderStatus.CONFIRMED, finalOrder.getStatus());
     }
 
     @Test
@@ -171,7 +174,7 @@ public class OutboxPatternIntegrationTest {
                 .quantity(5)
                 .unitPrice(new BigDecimal("12000.00"))
                 .totalAmount(new BigDecimal("60000.00")) // Exceeds 50000 mock limit
-                .status("CREATED")
+                .status(OrderStatus.CREATED)
                 .build();
 
         orderRepository.save(order);
@@ -180,7 +183,7 @@ public class OutboxPatternIntegrationTest {
                 .paymentId(UUID.randomUUID())
                 .orderId(orderId)
                 .amount(new BigDecimal("60000.00"))
-                .status("PENDING")
+                .status(PaymentStatus.PENDING)
                 .build();
 
         paymentRepository.save(payment);
@@ -192,7 +195,7 @@ public class OutboxPatternIntegrationTest {
                 .quantity(5)
                 .unitPrice(new BigDecimal("12000.00"))
                 .totalAmount(new BigDecimal("60000.00"))
-                .status("CONFIRMED")
+                .status(ReservationStatus.CONFIRMED)
                 .expiresAt(LocalDateTime.now().plusMinutes(5))
                 .build();
 
@@ -213,16 +216,16 @@ public class OutboxPatternIntegrationTest {
         // Assert payment and order marked FAILED
         Payment finalPayment = paymentRepository.findById(payment.getPaymentId()).orElse(null);
         assertNotNull(finalPayment);
-        assertEquals("FAILED", finalPayment.getStatus());
+        assertEquals(PaymentStatus.FAILED, finalPayment.getStatus());
 
         Order finalOrder = orderRepository.findById(orderId).orElse(null);
         assertNotNull(finalOrder);
-        assertEquals("FAILED", finalOrder.getStatus());
+        assertEquals(OrderStatus.FAILED, finalOrder.getStatus());
 
         // Assert Reservation updated to CANCELLED
         Reservation finalReservation = reservationRepository.findById(reservationId).orElse(null);
         assertNotNull(finalReservation);
-        assertEquals("CANCELLED", finalReservation.getStatus());
+        assertEquals(ReservationStatus.CANCELLED, finalReservation.getStatus());
 
         // Assert Inventory stock released: availableStock increases, reservedStock decreases
         Inventory finalInventory = inventoryRepository.findById(productId).orElse(null);
@@ -243,7 +246,7 @@ public class OutboxPatternIntegrationTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("ORDER_CREATED")
                 .payload("{}")
-                .status("PENDING")
+                .status(OutboxStatus.PENDING)
                 .retryCount(0)
                 .build();
 
@@ -257,7 +260,7 @@ public class OutboxPatternIntegrationTest {
         // Event should now be FAILED
         OutboxEvent failedEvent = outboxEventRepository.findById(outboxEvent.getEventId()).orElse(null);
         assertNotNull(failedEvent);
-        assertEquals("FAILED", failedEvent.getStatus());
+        assertEquals(OutboxStatus.FAILED, failedEvent.getStatus());
         assertEquals(3, failedEvent.getRetryCount());
     }
 }

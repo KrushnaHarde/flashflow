@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.krushna.flashflow.config.JwtService;
 import com.krushna.flashflow.inventory.Product;
 import com.krushna.flashflow.inventory.ProductRepository;
+import com.krushna.flashflow.inventory.ProductStatus;
 import com.krushna.flashflow.auth.Role;
 import com.krushna.flashflow.user.User;
 import com.krushna.flashflow.user.UserRepository;
@@ -125,7 +126,7 @@ public class ProductIntegrationTest {
         Product createdProduct = objectMapper.readValue(createResult.getResponse().getContentAsString(), Product.class);
         assertNotNull(createdProduct.getProductId());
         assertEquals("Smartphone", createdProduct.getName());
-        assertEquals("INACTIVE", createdProduct.getStatus()); // Default status as per requirement
+        assertEquals(ProductStatus.INACTIVE, createdProduct.getStatus()); // Default status as per requirement
 
         // 2. Get All Products
         MvcResult getAllResult = mockMvc.perform(get("/products")
@@ -173,7 +174,7 @@ public class ProductIntegrationTest {
 
         Product activated = productRepository.findById(createdProduct.getProductId()).orElse(null);
         assertNotNull(activated);
-        assertEquals("ACTIVE", activated.getStatus());
+        assertEquals(ProductStatus.ACTIVE, activated.getStatus());
 
         // 6. Deactivate Product (Admin only)
         mockMvc.perform(patch("/admin/products/" + createdProduct.getProductId() + "/deactivate")
@@ -182,6 +183,6 @@ public class ProductIntegrationTest {
 
         Product deactivated = productRepository.findById(createdProduct.getProductId()).orElse(null);
         assertNotNull(deactivated);
-        assertEquals("INACTIVE", deactivated.getStatus());
+        assertEquals(ProductStatus.INACTIVE, deactivated.getStatus());
     }
 }
