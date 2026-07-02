@@ -2,6 +2,8 @@ package com.krushna.flashflow.auth;
 
 import com.krushna.flashflow.user.User;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -15,11 +17,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
 @Slf4j
+@Tag(name = "Authentication", description = "Endpoints for user registration, login, and token refreshing")
 public class AuthController {
 
     private final AuthenticationService authenticationService;
 
     @PostMapping("/register")
+    @Operation(summary = "Register a new user", description = "Registers a new user in the system with roles and returns the created user entity.")
     public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
         log.info("Received request to register user with email: {}", request.getEmail());
         try {
@@ -33,6 +37,7 @@ public class AuthController {
     }
 
     @PostMapping("/login")
+    @Operation(summary = "Authenticate user", description = "Validates credentials and returns JWT access token and refresh token details.")
     public ResponseEntity<?> login(@RequestBody LoginRequest request) {
         log.info("Received login request for user: {}", request.getEmail());
         try {
@@ -49,6 +54,7 @@ public class AuthController {
     }
 
     @PostMapping("/refresh")
+    @Operation(summary = "Refresh JWT access token", description = "Validates the refresh token and returns a new JWT access token.")
     public ResponseEntity<?> refresh(@RequestBody RefreshRequest request) {
         log.info("Received token refresh request");
         try {

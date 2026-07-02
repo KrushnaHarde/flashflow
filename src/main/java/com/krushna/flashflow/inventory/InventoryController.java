@@ -1,5 +1,7 @@
 package com.krushna.flashflow.inventory;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -14,11 +16,13 @@ import java.util.UUID;
 @RestController
 @RequiredArgsConstructor
 @Slf4j
+@Tag(name = "Inventory", description = "Endpoints for managing stock levels and product inventory")
 public class InventoryController {
 
     private final InventoryService inventoryService;
 
     @PostMapping("/admin/inventory/{productId}")
+    @Operation(summary = "Add product stock (Admin only)", description = "Increments available and total stock count for a specific product catalog item.")
     public ResponseEntity<?> addStock(
             @PathVariable UUID productId,
             @RequestBody AddStockRequest request) {

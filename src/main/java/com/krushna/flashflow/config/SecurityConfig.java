@@ -32,7 +32,7 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints
-                .requestMatchers("/api/v1/auth/**", "/auth/**", "/health").permitAll()
+                .requestMatchers("/api/v1/auth/**", "/auth/**", "/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                 
                 // Admin Only endpoints
                 .requestMatchers(HttpMethod.POST, "/admin/products").hasRole("ADMIN")

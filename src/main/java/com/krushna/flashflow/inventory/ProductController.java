@@ -1,5 +1,7 @@
 package com.krushna.flashflow.inventory;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -12,17 +14,20 @@ import java.util.UUID;
 @RestController
 @RequiredArgsConstructor
 @Slf4j
+@Tag(name = "Products", description = "Endpoints for viewing and managing catalog products")
 public class ProductController {
 
     private final ProductService productService;
 
     @GetMapping("/products")
+    @Operation(summary = "Get all products", description = "Retrieves a list of all products in the database catalog.")
     public ResponseEntity<List<Product>> getAllProducts() {
         log.info("Request received to list all products");
         return ResponseEntity.ok(productService.getAllProducts());
     }
 
     @GetMapping("/products/{id}")
+    @Operation(summary = "Get product by ID", description = "Retrieves a single product details by its unique identifier.")
     public ResponseEntity<?> getProductById(@PathVariable UUID id) {
         log.info("Request received to fetch product by ID: {}", id);
         try {
@@ -36,6 +41,7 @@ public class ProductController {
     }
 
     @PostMapping("/admin/products")
+    @Operation(summary = "Create product (Admin only)", description = "Creates and registers a new product in the catalog system. Defaults status to INACTIVE.")
     public ResponseEntity<Product> createProduct(@RequestBody Product product) {
         log.info("Request received to create product: {}", product.getName());
         Product created = productService.createProduct(product);
@@ -43,6 +49,7 @@ public class ProductController {
     }
 
     @PutMapping("/admin/products/{id}")
+    @Operation(summary = "Update product details (Admin only)", description = "Updates fields of an existing product in the catalog.")
     public ResponseEntity<?> updateProduct(@PathVariable UUID id, @RequestBody Product product) {
         log.info("Request received to update product ID: {}", id);
         try {
@@ -55,6 +62,7 @@ public class ProductController {
     }
 
     @PatchMapping("/admin/products/{id}/activate")
+    @Operation(summary = "Activate product (Admin only)", description = "Transitions product status to ACTIVE so it can be booked by users.")
     public ResponseEntity<?> activateProduct(@PathVariable UUID id) {
         log.info("Request received to activate product ID: {}", id);
         try {
@@ -67,6 +75,7 @@ public class ProductController {
     }
 
     @PatchMapping("/admin/products/{id}/deactivate")
+    @Operation(summary = "Deactivate product (Admin only)", description = "Transitions product status to INACTIVE so users cannot book it.")
     public ResponseEntity<?> deactivateProduct(@PathVariable UUID id) {
         log.info("Request received to deactivate product ID: {}", id);
         try {
