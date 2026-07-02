@@ -25,4 +25,12 @@ public class KafkaConfig {
                 .replicas(1)
                 .build();
     }
+
+    @Bean
+    public NewTopic reservationsTopic() {
+        return TopicBuilder.name("flashflow.reservations")
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
 }

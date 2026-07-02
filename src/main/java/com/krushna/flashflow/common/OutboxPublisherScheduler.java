@@ -59,6 +59,8 @@ public class OutboxPublisherScheduler {
         String type = event.getAggregateType();
         if ("ORDER".equalsIgnoreCase(type) || "PAYMENT".equalsIgnoreCase(type)) {
             return "flashflow.payments";
+        } else if ("RESERVATION".equalsIgnoreCase(type)) {
+            return "flashflow.reservations";
         }
         return null;
     }

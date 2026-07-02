@@ -7,4 +7,5 @@ import java.util.UUID;
 
 @Repository
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
+    java.util.List<Reservation> findByStatusAndExpiresAtBefore(ReservationStatus status, java.time.LocalDateTime now);
 }
