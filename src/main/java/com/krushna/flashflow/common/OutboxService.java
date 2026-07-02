@@ -18,14 +18,14 @@ public class OutboxService {
     @Transactional(readOnly = true)
     public List<OutboxEvent> getPendingEvents() {
         log.debug("Fetching pending outbox events");
-        return outboxEventRepository.findByStatus("PENDING");
+        return outboxEventRepository.findByStatus(OutboxStatus.PENDING);
     }
 
     @Transactional
     public void markAsSent(UUID eventId) {
         log.info("Marking outbox event {} as SENT", eventId);
         outboxEventRepository.findById(eventId).ifPresent(event -> {
-            event.setStatus("SENT");
+            event.setStatus(OutboxStatus.SENT);
             outboxEventRepository.save(event);
         });
     }
@@ -38,7 +38,7 @@ public class OutboxService {
             event.setRetryCount(newRetryCount);
             if (newRetryCount >= maxRetries) {
                 log.error("Outbox event {} reached maximum retries ({}). Marking as FAILED.", eventId, maxRetries);
-                event.setStatus("FAILED");
+                event.setStatus(OutboxStatus.FAILED);
             } else {
                 log.info("Incremented retry count for outbox event {} to {}", eventId, newRetryCount);
             }

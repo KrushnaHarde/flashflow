@@ -10,8 +10,11 @@ import com.krushna.flashflow.inventory.redis.RedisReservationService;
 import com.krushna.flashflow.order.event.OrderRequestedEvent;
 import com.krushna.flashflow.payment.Payment;
 import com.krushna.flashflow.payment.PaymentRepository;
+import com.krushna.flashflow.payment.PaymentStatus;
 import com.krushna.flashflow.reservation.Reservation;
 import com.krushna.flashflow.reservation.ReservationRepository;
+import com.krushna.flashflow.reservation.ReservationStatus;
+import com.krushna.flashflow.common.OutboxStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,7 +39,7 @@ public class OrderFulfillmentService {
     private final RedisReservationService redisReservationService;
     private final RedisIdempotencyService redisIdempotencyService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public void fulfillOrder(OrderRequestedEvent event) {
@@ -49,7 +52,7 @@ public class OrderFulfillmentService {
             log.warn("Reservation not found in DB: {}", event.getReservationId());
             return;
         }
-        if (!"ACTIVE".equals(reservation.getStatus())) {
+        if (reservation.getStatus() != ReservationStatus.ACTIVE) {
             log.info("Reservation {} is not ACTIVE. Current status: {}. Skipping fulfillment.", 
                     event.getReservationId(), reservation.getStatus());
             return;
@@ -71,7 +74,7 @@ public class OrderFulfillmentService {
                 .quantity(event.getQuantity())
                 .unitPrice(reservation.getUnitPrice())
                 .totalAmount(event.getTotalAmount())
-                .status("CREATED")
+                .status(OrderStatus.CREATED)
                 .build();
         orderRepository.save(order);
         log.info("Created Order {} for reservation: {}", orderId, event.getReservationId());
@@ -82,7 +85,7 @@ public class OrderFulfillmentService {
                 .paymentId(paymentId)
                 .orderId(orderId)
                 .amount(order.getTotalAmount())
-                .status("PENDING")
+                .status(PaymentStatus.PENDING)
                 .build();
         paymentRepository.save(payment);
         log.info("Created Payment {} in PENDING state for Order {}", paymentId, orderId);
@@ -112,14 +115,14 @@ public class OrderFulfillmentService {
                 .aggregateId(orderId)
                 .eventType("ORDER_CREATED")
                 .payload(orderPayload)
-                .status("PENDING")
+                .status(OutboxStatus.PENDING)
                 .retryCount(0)
                 .build();
         outboxEventRepository.save(outboxEvent);
         log.info("Inserted OutboxEvent for Order {}", orderId);
 
         // 7. Update Reservation status to CONFIRMED
-        reservation.setStatus("CONFIRMED");
+        reservation.setStatus(ReservationStatus.CONFIRMED);
         reservationRepository.save(reservation);
         log.info("Updated DB Reservation status to CONFIRMED for: {}", event.getReservationId());
 
@@ -134,7 +137,7 @@ public class OrderFulfillmentService {
                     .build();
             try {
                 String responseJson = objectMapper.writeValueAsString(responseDto);
-                idempotency.setStatus("COMPLETED");
+                idempotency.setStatus(IdempotencyStatus.COMPLETED);
                 idempotency.setResponseSnapshot(responseJson);
                 idempotency.setOrderId(orderId);
                 idempotencyRepository.save(idempotency);
@@ -158,13 +161,13 @@ public class OrderFulfillmentService {
                         // Update idempotency cache in Redis
                         PurchaseResponseDto responseDto = PurchaseResponseDto.builder()
                                 .reservationId(event.getReservationId())
-                                .status("CONFIRMED")
+                                .status(ReservationStatus.CONFIRMED.name())
                                 .totalAmount(event.getTotalAmount())
                                 .build();
                         String responseJson = objectMapper.writeValueAsString(responseDto);
                         redisIdempotencyService.saveIdempotency(
                                 event.getIdempotencyKey(),
-                                "COMPLETED",
+                                IdempotencyStatus.COMPLETED.name(),
                                 responseJson,
                                 orderId,
                                 86400L

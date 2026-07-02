@@ -5,6 +5,7 @@ import com.krushna.flashflow.inventory.Inventory;
 import com.krushna.flashflow.inventory.InventoryService;
 import com.krushna.flashflow.inventory.Product;
 import com.krushna.flashflow.inventory.ProductService;
+import com.krushna.flashflow.inventory.ProductStatus;
 import com.krushna.flashflow.inventory.redis.RateLimiterService;
 import com.krushna.flashflow.inventory.redis.RedisIdempotencyService;
 import com.krushna.flashflow.inventory.redis.RedisInventoryService;
@@ -13,6 +14,7 @@ import com.krushna.flashflow.order.event.OrderRequestedEvent;
 import com.krushna.flashflow.order.kafka.OrderEventProducer;
 import com.krushna.flashflow.reservation.Reservation;
 import com.krushna.flashflow.reservation.ReservationRepository;
+import com.krushna.flashflow.reservation.ReservationStatus;
 import com.krushna.flashflow.user.User;
 import com.krushna.flashflow.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -88,9 +90,9 @@ public class PurchaseService {
         if (dbIdempotency.isPresent()) {
             Idempotency imp = dbIdempotency.get();
             log.info("Idempotency match found in DB for key: {}", idempotencyKey);
-            if ("PROCESSING".equals(imp.getStatus())) {
+            if (imp.getStatus() == IdempotencyStatus.PROCESSING) {
                 throw new IllegalStateException("Request is currently being processed.");
-            } else if ("COMPLETED".equals(imp.getStatus())) {
+            } else if (imp.getStatus() == IdempotencyStatus.COMPLETED) {
                 try {
                     return objectMapper.readValue(imp.getResponseSnapshot(), PurchaseResponseDto.class);
                 } catch (Exception e) {
@@ -112,7 +114,7 @@ public class PurchaseService {
             throw new IllegalArgumentException("Quantity must be greater than zero");
         }
         Product product = productService.getProductById(productId);
-        if (!"ACTIVE".equals(product.getStatus())) {
+        if (product.getStatus() != ProductStatus.ACTIVE) {
             log.warn("Product {} is not active. Status: {}", productId, product.getStatus());
             throw new IllegalArgumentException("Product is not active");
         }
@@ -148,7 +150,7 @@ public class PurchaseService {
                         .idempotencyKey(idempotencyKey)
                         .userId(userId)
                         .productId(productId)
-                        .status("PROCESSING")
+                        .status(IdempotencyStatus.PROCESSING)
                         .build());
 
                 // Update DB Inventory: availableStock decreases, reservedStock increases
@@ -167,7 +169,7 @@ public class PurchaseService {
                         .quantity(quantity)
                         .unitPrice(product.getPrice())
                         .totalAmount(totalAmount)
-                        .status("ACTIVE")
+                        .status(ReservationStatus.ACTIVE)
                         .expiresAt(LocalDateTime.now().plusMinutes(5))
                         .build();
 
@@ -182,10 +184,10 @@ public class PurchaseService {
         }
 
         // 8. Redis Save Reservation
-        redisReservationService.saveReservation(reservationId, "ACTIVE", 300L);
+        redisReservationService.saveReservation(reservationId, ReservationStatus.ACTIVE.name(), 300L);
 
         // Redis save idempotency as PROCESSING
-        redisIdempotencyService.saveIdempotency(idempotencyKey, "PROCESSING", null, null, 86400L);
+        redisIdempotencyService.saveIdempotency(idempotencyKey, IdempotencyStatus.PROCESSING.name(), null, null, 86400L);
 
         // 9. Publish Kafka event
         OrderRequestedEvent event = OrderRequestedEvent.builder()
@@ -203,7 +205,7 @@ public class PurchaseService {
 
         return PurchaseResponseDto.builder()
                 .reservationId(reservationId)
-                .status("ACTIVE")
+                .status(ReservationStatus.ACTIVE.name())
                 .totalAmount(totalAmount)
                 .build();
     }

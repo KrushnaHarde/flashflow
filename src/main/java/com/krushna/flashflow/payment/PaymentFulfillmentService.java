@@ -6,8 +6,10 @@ import com.krushna.flashflow.inventory.redis.RedisInventoryService;
 import com.krushna.flashflow.inventory.redis.RedisReservationService;
 import com.krushna.flashflow.order.Order;
 import com.krushna.flashflow.order.OrderRepository;
+import com.krushna.flashflow.order.OrderStatus;
 import com.krushna.flashflow.reservation.Reservation;
 import com.krushna.flashflow.reservation.ReservationRepository;
+import com.krushna.flashflow.reservation.ReservationStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -44,7 +46,7 @@ public class PaymentFulfillmentService {
             return;
         }
 
-        if (!"PENDING".equals(payment.getStatus())) {
+        if (payment.getStatus() != PaymentStatus.PENDING) {
             log.info("Payment for order {} is already processed. Current status: {}", orderId, payment.getStatus());
             return;
         }
@@ -60,14 +62,14 @@ public class PaymentFulfillmentService {
         String result = paymentService.processPayment(payment.getAmount());
 
         if ("SUCCESS".equals(result)) {
-            payment.setStatus("SUCCESS");
-            dbOrder.setStatus("CONFIRMED");
+            payment.setStatus(PaymentStatus.SUCCESS);
+            dbOrder.setStatus(OrderStatus.CONFIRMED);
             paymentRepository.save(payment);
             orderRepository.save(dbOrder);
             log.info("Payment succeeded. Order {} status set to CONFIRMED", orderId);
         } else {
-            payment.setStatus("FAILED");
-            dbOrder.setStatus("FAILED");
+            payment.setStatus(PaymentStatus.FAILED);
+            dbOrder.setStatus(OrderStatus.FAILED);
             paymentRepository.save(payment);
             orderRepository.save(dbOrder);
             log.warn("Payment failed. Order {} status set to FAILED", orderId);
@@ -75,9 +77,9 @@ public class PaymentFulfillmentService {
             // Release Stock & Cancel Reservation
             UUID reservationId = dbOrder.getReservationId();
             Reservation reservation = reservationRepository.findById(reservationId).orElse(null);
-            if (reservation != null && "CONFIRMED".equals(reservation.getStatus())) {
+            if (reservation != null && reservation.getStatus() == ReservationStatus.CONFIRMED) {
                 // Change reservation status to CANCELLED in DB
-                reservation.setStatus("CANCELLED");
+                reservation.setStatus(ReservationStatus.CANCELLED);
                 reservationRepository.save(reservation);
                 log.info("Reservation {} status updated to CANCELLED", reservationId);
 
@@ -98,7 +100,7 @@ public class PaymentFulfillmentService {
                                 log.info("Fulfillment failed transaction committed. Syncing releases to Redis...");
                                 try {
                                     redisInventoryService.setStock(dbOrder.getProductId(), inventory.getAvailableStock());
-                                    redisReservationService.saveReservation(reservationId, "CANCELLED", 300L);
+                                    redisReservationService.saveReservation(reservationId, ReservationStatus.CANCELLED.name(), 300L);
                                     log.info("Successfully updated Redis state after payment failure release");
                                 } catch (Exception e) {
                                     log.error("Failed to sync Redis state post-commit on payment failure", e);
