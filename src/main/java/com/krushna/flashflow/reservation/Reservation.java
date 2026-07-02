@@ -42,8 +42,9 @@ public class Reservation {
     @Column(name = "total_amount", nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
 
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
     @Column(nullable = false, length = 50)
-    private String status;
+    private ReservationStatus status;
 
     @Column(name = "expires_at", nullable = false)
     private LocalDateTime expiresAt;

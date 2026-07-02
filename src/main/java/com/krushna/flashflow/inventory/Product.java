@@ -38,8 +38,9 @@ public class Product {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
 
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
     @Column(nullable = false, length = 50)
-    private String status;
+    private ProductStatus status;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

@@ -35,8 +35,9 @@ public class Idempotency {
     @Column(name = "request_hash")
     private String requestHash;
 
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
     @Column(nullable = false, length = 50)
-    private String status;
+    private IdempotencyStatus status;
 
     @Column(name = "response_snapshot", columnDefinition = "TEXT")
     private String responseSnapshot;

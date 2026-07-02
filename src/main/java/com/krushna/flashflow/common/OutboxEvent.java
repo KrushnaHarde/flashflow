@@ -38,8 +38,9 @@ public class OutboxEvent {
     @Column(columnDefinition = "TEXT", nullable = false)
     private String payload;
 
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
     @Column(nullable = false, length = 50)
-    private String status;
+    private OutboxStatus status;
 
     @Column(name = "retry_count", nullable = false)
     @Builder.Default

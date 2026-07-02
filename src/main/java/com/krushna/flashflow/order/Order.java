@@ -45,8 +45,9 @@ public class Order {
     @Column(name = "total_amount", nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
 
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
     @Column(nullable = false, length = 50)
-    private String status;
+    private OrderStatus status;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

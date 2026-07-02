@@ -33,8 +33,9 @@ public class Payment {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal amount;
 
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
     @Column(nullable = false, length = 50)
-    private String status;
+    private PaymentStatus status;
 
     @Column(name = "payment_gateway_id")
     private String paymentGatewayId;
