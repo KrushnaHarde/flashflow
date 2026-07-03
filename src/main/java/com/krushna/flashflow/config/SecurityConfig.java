@@ -32,7 +32,7 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints
-                .requestMatchers("/api/v1/auth/**", "/auth/**", "/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                .requestMatchers("/api/v1/auth/**", "/auth/**", "/health", "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                 
                 // Admin Only endpoints
                 .requestMatchers(HttpMethod.POST, "/admin/products").hasRole("ADMIN")
@@ -40,11 +40,15 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PATCH, "/admin/products/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/admin/inventory/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/admin/orders", "/admin/orders/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST, "/admin/sales").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT, "/admin/sales/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/admin/sales/**").hasRole("ADMIN")
                 
                 // Authenticated User endpoints
                 .requestMatchers(HttpMethod.POST, "/purchase", "/purchase/**").hasAnyRole("USER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/orders/**").hasAnyRole("USER", "ADMIN")
                 .requestMatchers(HttpMethod.GET, "/products", "/products/**").hasAnyRole("USER", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/sales", "/sales/**").hasAnyRole("USER", "ADMIN")
                 
                 // Any other request must be authenticated
                 .anyRequest().authenticated()
@@ -63,7 +67,8 @@ public class SecurityConfig {
 
     @Bean
     public AuthenticationProvider authenticationProvider() {
-        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider(userDetailsService);
+        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+        authProvider.setUserDetailsService(userDetailsService);
         authProvider.setPasswordEncoder(passwordEncoder());
         return authProvider;
     }
