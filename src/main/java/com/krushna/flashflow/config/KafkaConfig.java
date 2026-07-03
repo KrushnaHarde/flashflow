@@ -4,8 +4,7 @@ import org.apache.kafka.clients.admin.NewTopic;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
-
-import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
@@ -55,15 +54,7 @@ public class KafkaConfig {
     }
 
     @Bean
-    public NewTopic reservationsDltTopic() {
-        return TopicBuilder.name("flashflow.reservations.DLT")
-                .partitions(1)
-                .replicas(1)
-                .build();
-    }
-
-    @Bean
-    public CommonErrorHandler errorHandler(org.springframework.kafka.core.KafkaTemplate<String, String> template) {
+    public CommonErrorHandler errorHandler(KafkaTemplate<String, String> template) {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(template);
         return new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 2L));
     }
