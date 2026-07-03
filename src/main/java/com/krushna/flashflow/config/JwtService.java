@@ -4,6 +4,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
@@ -13,16 +14,19 @@ import java.util.Map;
 import java.util.function.Function;
 
 @Service
+@Slf4j
 public class JwtService {
 
-    // Must be at least 256 bits (32 bytes)
-    private static final String SECRET_KEY = "this_is#randomly$generated!sequence)of1characters&forStrong*jnc348yt87fbu39084cd98dry&^T%^$g2g2f";
+    @org.springframework.beans.factory.annotation.Value("${flashflow.jwt.secret}")
+    private String secretKey;
+    
+    private static final String CURRENT_KID = "v1";
     
     // Access token TTL: 1 hour in milliseconds
     private static final long ACCESS_TOKEN_EXPIRATION = 3600000;
 
     private SecretKey getSigningKey() {
-        return Keys.hmacShaKeyFor(SECRET_KEY.getBytes(StandardCharsets.UTF_8));
+        return Keys.hmacShaKeyFor(secretKey.getBytes(StandardCharsets.UTF_8));
     }
 
     public String extractUsername(String token) {
@@ -40,6 +44,7 @@ public class JwtService {
 
     public String generateToken(Map<String, Object> extraClaims, String email) {
         return Jwts.builder()
+                .header().keyId(CURRENT_KID).and()
                 .claims(extraClaims)
                 .subject(email)
                 .issuedAt(new Date(System.currentTimeMillis()))
@@ -63,7 +68,12 @@ public class JwtService {
 
     private Claims extractAllClaims(String token) {
         return Jwts.parser()
-                .verifyWith(getSigningKey())
+                .keyLocator(header -> {
+                    String kid = (String) header.get("kid");
+                    log.debug("Resolving key for kid: {}", kid);
+                    // In a production scenario, we look up the key in a rotation map or vault.
+                    return getSigningKey();
+                })
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();

@@ -3,6 +3,7 @@ package com.krushna.flashflow.auth;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -10,4 +11,5 @@ import java.util.UUID;
 public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID> {
     Optional<RefreshToken> findByToken(String token);
     void deleteByUserId(UUID userId);
+    int deleteByExpiryDateBefore(Instant now);
 }

@@ -132,4 +132,16 @@ public class AuthenticationService {
                 .expiresIn(jwtService.getExpirationTime())
                 .build();
     }
+
+    @Transactional
+    public void logout(LogoutRequest request) {
+        log.info("Processing logout request...");
+        if (request.getRefreshToken() != null) {
+            refreshTokenRepository.findByToken(request.getRefreshToken())
+                    .ifPresent(token -> {
+                        refreshTokenRepository.delete(token);
+                        log.info("Deleted refresh token from database during logout");
+                    });
+        }
+    }
 }
