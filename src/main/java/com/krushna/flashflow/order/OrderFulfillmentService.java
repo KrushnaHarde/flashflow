@@ -90,15 +90,17 @@ public class OrderFulfillmentService {
         paymentRepository.save(payment);
         log.info("Created Payment {} in PENDING state for Order {}", paymentId, orderId);
 
-        // 5. Update DB Inventory: availableStock was decremented during reservation.
-        //    Now we finalize: decrement reservedStock by quantity, decrement totalStock by quantity.
+        // 5. Update DB Inventory: availableStock and totalStock are decremented asynchronously.
         Inventory inventory = inventoryRepository.findById(event.getProductId())
                 .orElseThrow(() -> new IllegalArgumentException("Inventory not found for product: " + event.getProductId()));
 
-        inventory.setReservedStock(inventory.getReservedStock() - event.getQuantity());
+        if (inventory.getAvailableStock() < event.getQuantity()) {
+            throw new IllegalArgumentException("Insufficient stock available in DB for product: " + event.getProductId());
+        }
+        inventory.setAvailableStock(inventory.getAvailableStock() - event.getQuantity());
         inventory.setTotalStock(inventory.getTotalStock() - event.getQuantity());
         inventoryRepository.save(inventory);
-        log.info("Updated DB Inventory for product: {}. Decremented totalStock and reservedStock by {}", 
+        log.info("Updated DB Inventory for product: {}. Decremented totalStock and availableStock by {}", 
                 event.getProductId(), event.getQuantity());
 
         // 6. Insert OutboxEvent
@@ -126,22 +128,22 @@ public class OrderFulfillmentService {
         reservationRepository.save(reservation);
         log.info("Updated DB Reservation status to CONFIRMED for: {}", event.getReservationId());
 
-        // 8. Update DB Idempotency status to COMPLETED
-        Idempotency idempotency = idempotencyRepository.findById(event.getIdempotencyKey())
+        // 8. Update DB Idempotency status to ORDER_CREATED
+        Idempotency idempotency = idempotencyRepository.findById(new IdempotencyId(event.getIdempotencyKey(), event.getUserId()))
                 .orElse(null);
         if (idempotency != null) {
             PurchaseResponseDto responseDto = PurchaseResponseDto.builder()
                     .reservationId(event.getReservationId())
-                    .status("CONFIRMED")
+                    .status("ORDER_CREATED")
                     .totalAmount(event.getTotalAmount())
                     .build();
             try {
                 String responseJson = objectMapper.writeValueAsString(responseDto);
-                idempotency.setStatus(IdempotencyStatus.COMPLETED);
+                idempotency.setStatus(IdempotencyStatus.ORDER_CREATED);
                 idempotency.setResponseSnapshot(responseJson);
                 idempotency.setOrderId(orderId);
                 idempotencyRepository.save(idempotency);
-                log.info("Updated DB Idempotency status to COMPLETED for key: {}", event.getIdempotencyKey());
+                log.info("Updated DB Idempotency status to ORDER_CREATED for key: {}", event.getIdempotencyKey());
             } catch (Exception e) {
                 log.error("Failed to serialize idempotency response snapshot", e);
             }
@@ -161,13 +163,14 @@ public class OrderFulfillmentService {
                         // Update idempotency cache in Redis
                         PurchaseResponseDto responseDto = PurchaseResponseDto.builder()
                                 .reservationId(event.getReservationId())
-                                .status(ReservationStatus.CONFIRMED.name())
+                                .status("ORDER_CREATED")
                                 .totalAmount(event.getTotalAmount())
                                 .build();
                         String responseJson = objectMapper.writeValueAsString(responseDto);
                         redisIdempotencyService.saveIdempotency(
+                                event.getUserId(),
                                 event.getIdempotencyKey(),
-                                IdempotencyStatus.COMPLETED.name(),
+                                IdempotencyStatus.ORDER_CREATED.name(),
                                 responseJson,
                                 orderId,
                                 86400L

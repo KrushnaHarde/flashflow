@@ -56,6 +56,10 @@ public class OutboxPublisherScheduler {
     }
 
     private String resolveTopic(OutboxEvent event) {
+        String eventType = event.getEventType();
+        if ("ORDER_REQUESTED".equalsIgnoreCase(eventType)) {
+            return "flashflow.orders";
+        }
         String type = event.getAggregateType();
         if ("ORDER".equalsIgnoreCase(type) || "PAYMENT".equalsIgnoreCase(type)) {
             return "flashflow.payments";

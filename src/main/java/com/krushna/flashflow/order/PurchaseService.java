@@ -11,12 +11,14 @@ import com.krushna.flashflow.inventory.redis.RedisIdempotencyService;
 import com.krushna.flashflow.inventory.redis.RedisInventoryService;
 import com.krushna.flashflow.inventory.redis.RedisReservationService;
 import com.krushna.flashflow.order.event.OrderRequestedEvent;
-import com.krushna.flashflow.order.kafka.OrderEventProducer;
 import com.krushna.flashflow.reservation.Reservation;
 import com.krushna.flashflow.reservation.ReservationRepository;
 import com.krushna.flashflow.reservation.ReservationStatus;
 import com.krushna.flashflow.user.User;
 import com.krushna.flashflow.user.UserRepository;
+import com.krushna.flashflow.common.OutboxEvent;
+import com.krushna.flashflow.common.OutboxEventRepository;
+import com.krushna.flashflow.common.OutboxStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,10 +44,11 @@ public class PurchaseService {
     private final InventoryService inventoryService;
     private final ReservationRepository reservationRepository;
     private final RedisReservationService redisReservationService;
-    private final OrderEventProducer orderEventProducer;
+    private final OutboxEventRepository outboxEventRepository;
     private final TransactionTemplate transactionTemplate;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
 
     @Value("${flashflow.rate-limit.limit:5}")
     private int rateLimitLimit;
@@ -62,19 +65,12 @@ public class PurchaseService {
         log.info("Processing purchase request. User: {}, Product: {}, Quantity: {}, IdempotencyKey: {}", 
                 userId, productId, quantity, idempotencyKey);
 
-        // 1. Rate Limiting Check (Redis)
-        boolean allowed = rateLimiterService.rateLimit(userId, rateLimitLimit, rateLimitWindow);
-        if (!allowed) {
-            log.warn("Rate limit exceeded for user: {}", userId);
-            throw new IllegalStateException("Rate limit exceeded. Please try again later.");
-        }
-
-        // 2. Idempotency Check (Redis & DB)
+        // 1. Idempotency Check (Redis & DB) - CHECK THIS BEFORE RATE LIMITING
         // First check Redis
-        RedisIdempotencyService.IdempotencyValue cached = redisIdempotencyService.getIdempotency(idempotencyKey);
+        RedisIdempotencyService.IdempotencyValue cached = redisIdempotencyService.getIdempotency(userId, idempotencyKey);
         if (cached != null) {
-            log.info("Idempotency match found in Redis for key: {}", idempotencyKey);
-            if ("PROCESSING".equals(cached.getStatus())) {
+            log.info("Idempotency match found in Redis for user: {}, key: {}", userId, idempotencyKey);
+            if ("PROCESSING".equals(cached.getStatus()) || "ORDER_CREATED".equals(cached.getStatus())) {
                 throw new IllegalStateException("Request is currently being processed.");
             } else if ("COMPLETED".equals(cached.getStatus())) {
                 try {
@@ -86,11 +82,11 @@ public class PurchaseService {
         }
 
         // Check DB as fallback
-        Optional<Idempotency> dbIdempotency = idempotencyRepository.findById(idempotencyKey);
+        Optional<Idempotency> dbIdempotency = idempotencyRepository.findById(new IdempotencyId(idempotencyKey, userId));
         if (dbIdempotency.isPresent()) {
             Idempotency imp = dbIdempotency.get();
-            log.info("Idempotency match found in DB for key: {}", idempotencyKey);
-            if (imp.getStatus() == IdempotencyStatus.PROCESSING) {
+            log.info("Idempotency match found in DB for user: {}, key: {}", userId, idempotencyKey);
+            if (imp.getStatus() == IdempotencyStatus.PROCESSING || imp.getStatus() == IdempotencyStatus.ORDER_CREATED) {
                 throw new IllegalStateException("Request is currently being processed.");
             } else if (imp.getStatus() == IdempotencyStatus.COMPLETED) {
                 try {
@@ -99,6 +95,13 @@ public class PurchaseService {
                     log.error("Failed to deserialize DB idempotency response", e);
                 }
             }
+        }
+
+        // 2. Rate Limiting Check (Redis)
+        boolean allowed = rateLimiterService.rateLimit(userId, rateLimitLimit, rateLimitWindow);
+        if (!allowed) {
+            log.warn("Rate limit exceeded for user: {}", userId);
+            throw new IllegalStateException("Rate limit exceeded. Please try again later.");
         }
 
         // 3. Validate User
@@ -119,13 +122,13 @@ public class PurchaseService {
             throw new IllegalArgumentException("Product is not active");
         }
 
-        // 5. Redis Stock Check & Lazy Load
+        // 5. Redis Stock Check & Lazy Load (using setStockIfAbsent SETNX guarded set)
         Integer stockInRedis = redisInventoryService.getStock(productId);
         if (stockInRedis == null) {
-            log.info("Redis inventory stock not found for product: {}. Loading from database...", productId);
+            log.warn("Redis inventory stock not found for product: {}. Performing lazy load from DB...", productId);
             try {
                 Inventory dbInventory = inventoryService.getInventoryByProductId(productId);
-                redisInventoryService.setStock(productId, dbInventory.getAvailableStock());
+                redisInventoryService.setStockIfAbsent(productId, dbInventory.getAvailableStock());
             } catch (Exception e) {
                 log.warn("Inventory record does not exist in DB for product: {}", productId);
                 throw new IllegalArgumentException("Insufficient stock available");
@@ -142,8 +145,26 @@ public class PurchaseService {
         UUID reservationId = UUID.randomUUID();
         BigDecimal totalAmount = product.getPrice().multiply(new BigDecimal(quantity));
 
+        // Create the event object to serialize and save to outbox
+        OrderRequestedEvent event = OrderRequestedEvent.builder()
+                .reservationId(reservationId)
+                .userId(userId)
+                .productId(productId)
+                .quantity(quantity)
+                .totalAmount(totalAmount)
+                .idempotencyKey(idempotencyKey)
+                .build();
+
+        String outboxPayload;
         try {
-            // 7. DB Transaction: Create Reservation + DB Inventory update + Idempotency save
+            outboxPayload = objectMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            redisInventoryService.releaseStock(productId, quantity);
+            throw new RuntimeException("Failed to serialize OrderRequestedEvent for outbox", e);
+        }
+
+        try {
+            // 7. DB Transaction: Create Reservation + Idempotency save + OutboxEvent save (no DB Inventory update)
             transactionTemplate.execute(status -> {
                 // Save idempotency as PROCESSING
                 idempotencyRepository.save(Idempotency.builder()
@@ -152,14 +173,6 @@ public class PurchaseService {
                         .productId(productId)
                         .status(IdempotencyStatus.PROCESSING)
                         .build());
-
-                // Update DB Inventory: availableStock decreases, reservedStock increases
-                Inventory dbInventory = inventoryService.getInventoryByProductId(productId);
-                if (dbInventory.getAvailableStock() < quantity) {
-                    throw new IllegalArgumentException("Insufficient stock available");
-                }
-                dbInventory.setAvailableStock(dbInventory.getAvailableStock() - quantity);
-                dbInventory.setReservedStock(dbInventory.getReservedStock() + quantity);
 
                 // Create Reservation
                 Reservation reservation = Reservation.builder()
@@ -174,6 +187,20 @@ public class PurchaseService {
                         .build();
 
                 reservationRepository.save(reservation);
+
+                // Create OutboxEvent
+                OutboxEvent outboxEvent = OutboxEvent.builder()
+                        .eventId(UUID.randomUUID())
+                        .aggregateType("RESERVATION")
+                        .aggregateId(reservationId)
+                        .eventType("ORDER_REQUESTED")
+                        .payload(outboxPayload)
+                        .status(OutboxStatus.PENDING)
+                        .retryCount(0)
+                        .build();
+
+                outboxEventRepository.save(outboxEvent);
+
                 return null;
             });
         } catch (Exception e) {
@@ -187,19 +214,7 @@ public class PurchaseService {
         redisReservationService.saveReservation(reservationId, ReservationStatus.ACTIVE.name(), 300L);
 
         // Redis save idempotency as PROCESSING
-        redisIdempotencyService.saveIdempotency(idempotencyKey, IdempotencyStatus.PROCESSING.name(), null, null, 86400L);
-
-        // 9. Publish Kafka event
-        OrderRequestedEvent event = OrderRequestedEvent.builder()
-                .reservationId(reservationId)
-                .userId(userId)
-                .productId(productId)
-                .quantity(quantity)
-                .totalAmount(totalAmount)
-                .idempotencyKey(idempotencyKey)
-                .build();
-
-        orderEventProducer.publishOrderRequested(event);
+        redisIdempotencyService.saveIdempotency(userId, idempotencyKey, IdempotencyStatus.PROCESSING.name(), null, null, 86400L);
 
         log.info("Purchase reservation successfully created: {}", reservationId);
 
