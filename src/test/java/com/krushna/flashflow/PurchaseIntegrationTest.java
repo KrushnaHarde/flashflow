@@ -83,6 +83,9 @@ public class PurchaseIntegrationTest {
     private com.krushna.flashflow.common.OutboxPublisherScheduler outboxPublisherScheduler;
 
     @Autowired
+    private FlashSaleRepository flashSaleRepository;
+
+    @Autowired
     private IdempotencyRepository idempotencyRepository;
 
     @Autowired
@@ -139,6 +142,7 @@ public class PurchaseIntegrationTest {
         reservationRepository.deleteAll();
         inventoryRepository.deleteAll();
         productRepository.deleteAll();
+        flashSaleRepository.deleteAll();
         userRepository.deleteAll();
 
         // Create User
@@ -172,6 +176,15 @@ public class PurchaseIntegrationTest {
                 .reservedStock(0)
                 .build();
         inventoryRepository.save(inventory);
+
+        // Create started FlashSale
+        FlashSale sale = FlashSale.builder()
+                .saleId(UUID.randomUUID())
+                .name("Test Flash Sale")
+                .startTime(java.time.LocalDateTime.now().minusMinutes(5))
+                .productIds(java.util.Set.of(activeProduct.getProductId()))
+                .build();
+        flashSaleRepository.save(sale);
     }
 
     @Test
@@ -375,5 +388,87 @@ public class PurchaseIntegrationTest {
         assertNotNull(finalInventory);
         assertEquals(90, finalInventory.getAvailableStock());
         assertEquals(90, finalInventory.getTotalStock());
+    }
+
+    @Test
+    public void testPurchaseWithSaleStartTimeConstraints() throws Exception {
+        // Stub rate limiter to allow requests
+        when(rateLimiterService.rateLimit(any(UUID.class), anyInt(), anyInt())).thenReturn(true);
+
+        // 1. Create a product that has NO flash sale associated with it
+        Product productWithoutSale = Product.builder()
+                .productId(UUID.randomUUID())
+                .name("No Sale Product")
+                .description("No sale associated")
+                .coverImg("http://example.com/nosale.jpg")
+                .price(new BigDecimal("10.00"))
+                .status(ProductStatus.ACTIVE)
+                .build();
+        productRepository.save(productWithoutSale);
+
+        User u1 = User.builder()
+                .userId(UUID.randomUUID())
+                .name("U1")
+                .email("u1@example.com")
+                .password("pass")
+                .enabled(true)
+                .role(Role.USER)
+                .build();
+        userRepository.save(u1);
+        String token1 = "Bearer " + jwtService.generateToken(u1.getEmail());
+
+        PurchaseRequestDto requestNoSale = new PurchaseRequestDto();
+        requestNoSale.setUserId(u1.getUserId());
+        requestNoSale.setProductId(productWithoutSale.getProductId());
+        requestNoSale.setQuantity(1);
+        requestNoSale.setIdempotencyKey(UUID.randomUUID().toString());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/purchase")
+                .header("Authorization", token1)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(requestNoSale)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+
+        // 2. Create a product with a FUTURE flash sale
+        Product futureSaleProduct = Product.builder()
+                .productId(UUID.randomUUID())
+                .name("Future Sale Product")
+                .description("Future sale")
+                .coverImg("http://example.com/future.jpg")
+                .price(new BigDecimal("20.00"))
+                .status(ProductStatus.ACTIVE)
+                .build();
+        productRepository.save(futureSaleProduct);
+
+        FlashSale futureSale = FlashSale.builder()
+                .saleId(UUID.randomUUID())
+                .name("Future Sale")
+                .startTime(java.time.LocalDateTime.now().plusHours(1))
+                .productIds(java.util.Set.of(futureSaleProduct.getProductId()))
+                .build();
+        flashSaleRepository.save(futureSale);
+
+        User u2 = User.builder()
+                .userId(UUID.randomUUID())
+                .name("U2")
+                .email("u2@example.com")
+                .password("pass")
+                .enabled(true)
+                .role(Role.USER)
+                .build();
+        userRepository.save(u2);
+        String token2 = "Bearer " + jwtService.generateToken(u2.getEmail());
+
+        PurchaseRequestDto requestFutureSale = new PurchaseRequestDto();
+        requestFutureSale.setUserId(u2.getUserId());
+        requestFutureSale.setProductId(futureSaleProduct.getProductId());
+        requestFutureSale.setQuantity(1);
+        requestFutureSale.setIdempotencyKey(UUID.randomUUID().toString());
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/purchase")
+                .header("Authorization", token2)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(requestFutureSale)))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
     }
 }
