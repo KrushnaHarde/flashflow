@@ -56,16 +56,7 @@ public class ReservationExpiryService {
             reservation.setStatus(ReservationStatus.EXPIRED);
             reservationRepository.save(reservation);
 
-            // 2. Release Stock in DB (availableStock += quantity, reservedStock -= quantity)
-            Inventory inventory = inventoryRepository.findById(productId).orElse(null);
-            if (inventory != null) {
-                inventory.setAvailableStock(inventory.getAvailableStock() + quantity);
-                inventory.setReservedStock(inventory.getReservedStock() - quantity);
-                inventoryRepository.save(inventory);
-                log.info("Successfully released stock in DB for product: {}", productId);
-            } else {
-                log.warn("Inventory record not found in DB for product: {} during reservation expiration", productId);
-            }
+            // 2. No DB Stock release required as /purchase does not synchronously write to DB inventory.
 
             // 3. Create OutboxEvent
             String reservationPayload;
