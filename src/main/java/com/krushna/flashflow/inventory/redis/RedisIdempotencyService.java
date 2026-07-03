@@ -51,12 +51,12 @@ public class RedisIdempotencyService {
         public void setOrderId(UUID orderId) { this.orderId = orderId; }
     }
 
-    public void saveIdempotency(String key, String status, String responseSnapshot, UUID orderId, long ttlSeconds) {
+    public void saveIdempotency(UUID userId, String key, String status, String responseSnapshot, UUID orderId, long ttlSeconds) {
         IdempotencyValue value = new IdempotencyValue(status, responseSnapshot, orderId);
         try {
             String json = objectMapper.writeValueAsString(value);
             stringRedisTemplate.opsForValue().set(
-                IDEMPOTENCY_KEY_PREFIX + key,
+                IDEMPOTENCY_KEY_PREFIX + userId + ":" + key,
                 json,
                 ttlSeconds,
                 TimeUnit.SECONDS
@@ -66,8 +66,8 @@ public class RedisIdempotencyService {
         }
     }
 
-    public IdempotencyValue getIdempotency(String key) {
-        String json = stringRedisTemplate.opsForValue().get(IDEMPOTENCY_KEY_PREFIX + key);
+    public IdempotencyValue getIdempotency(UUID userId, String key) {
+        String json = stringRedisTemplate.opsForValue().get(IDEMPOTENCY_KEY_PREFIX + userId + ":" + key);
         if (json == null) {
             return null;
         }

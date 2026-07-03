@@ -14,8 +14,11 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+import jakarta.persistence.IdClass;
+
 @Entity
 @Table(name = "idempotency_keys")
+@IdClass(IdempotencyId.class)
 @Data
 @Builder
 @NoArgsConstructor
@@ -26,6 +29,7 @@ public class Idempotency {
     @Column(name = "idempotency_key", updatable = false, nullable = false)
     private String idempotencyKey;
 
+    @Id
     @Column(name = "user_id", nullable = false)
     private UUID userId;
 
