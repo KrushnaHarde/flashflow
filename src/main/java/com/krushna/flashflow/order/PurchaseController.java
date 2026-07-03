@@ -19,24 +19,10 @@ public class PurchaseController {
 
     @PostMapping("/purchase")
     @Operation(summary = "Initiate flash sale purchase", description = "Validates user/product availability, reserves Redis stock, and schedules order processing synchronously or asynchronously.")
-    public ResponseEntity<?> purchase(@RequestBody PurchaseRequestDto request) {
+    public ResponseEntity<PurchaseResponseDto> purchase(@RequestBody PurchaseRequestDto request) {
         log.info("Received purchase request for user: {}, product: {}", request.getUserId(), request.getProductId());
-        try {
-            PurchaseResponseDto response = purchaseService.purchase(request);
-            log.info("Purchase request successfully accepted. Reservation: {}", response.getReservationId());
-            return ResponseEntity.accepted().body(response);
-        } catch (IllegalArgumentException e) {
-            log.warn("Validation failed for purchase request: {}", e.getMessage());
-            return ResponseEntity.badRequest().body(e.getMessage());
-        } catch (IllegalStateException e) {
-            log.warn("Illegal state/conflict for purchase request: {}", e.getMessage());
-            if (e.getMessage().contains("Rate limit")) {
-                return ResponseEntity.status(429).body(e.getMessage());
-            }
-            return ResponseEntity.status(409).body(e.getMessage());
-        } catch (Exception e) {
-            log.error("Internal error processing purchase request", e);
-            return ResponseEntity.internalServerError().body("An internal error occurred: " + e.getMessage());
-        }
+        PurchaseResponseDto response = purchaseService.purchase(request);
+        log.info("Purchase request successfully accepted. Reservation: {}", response.getReservationId());
+        return ResponseEntity.accepted().body(response);
     }
 }

@@ -23,22 +23,16 @@ public class InventoryController {
 
     @PostMapping("/admin/inventory/{productId}")
     @Operation(summary = "Add product stock (Admin only)", description = "Increments available and total stock count for a specific product catalog item.")
-    public ResponseEntity<?> addStock(
+    public ResponseEntity<Inventory> addStock(
             @PathVariable UUID productId,
             @RequestBody AddStockRequest request) {
         log.info("Received request to add stock for product ID: {}", productId);
-        try {
-            if (request == null || request.getQuantity() == null || request.getQuantity() <= 0) {
-                log.warn("Invalid stock add request for product ID: {}. Quantity must be positive.", productId);
-                return ResponseEntity.badRequest().body("Quantity must be greater than zero");
-            }
-            Inventory updatedInventory = inventoryService.addStock(productId, request.getQuantity());
-            log.info("Successfully updated inventory for product ID: {}. Total stock: {}, Available stock: {}", 
-                    productId, updatedInventory.getTotalStock(), updatedInventory.getAvailableStock());
-            return ResponseEntity.ok(updatedInventory);
-        } catch (IllegalArgumentException e) {
-            log.warn("Product or inventory not found when adding stock for product ID: {}. Error: {}", productId, e.getMessage());
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+        if (request == null || request.getQuantity() == null || request.getQuantity() <= 0) {
+            throw new IllegalArgumentException("Quantity must be greater than zero");
         }
+        Inventory updatedInventory = inventoryService.addStock(productId, request.getQuantity());
+        log.info("Successfully updated inventory for product ID: {}. Total stock: {}, Available stock: {}", 
+                productId, updatedInventory.getTotalStock(), updatedInventory.getAvailableStock());
+        return ResponseEntity.ok(updatedInventory);
     }
 }

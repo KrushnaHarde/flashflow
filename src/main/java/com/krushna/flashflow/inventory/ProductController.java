@@ -28,16 +28,11 @@ public class ProductController {
 
     @GetMapping("/products/{id}")
     @Operation(summary = "Get product by ID", description = "Retrieves a single product details by its unique identifier.")
-    public ResponseEntity<?> getProductById(@PathVariable UUID id) {
+    public ResponseEntity<Product> getProductById(@PathVariable UUID id) {
         log.info("Request received to fetch product by ID: {}", id);
-        try {
-            Product product = productService.getProductById(id);
-            log.info("Successfully fetched product ID: {}", id);
-            return ResponseEntity.ok(product);
-        } catch (IllegalArgumentException e) {
-            log.warn("Product fetching failed for ID {}: {}", id, e.getMessage());
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
-        }
+        Product product = productService.getProductById(id);
+        log.info("Successfully fetched product ID: {}", id);
+        return ResponseEntity.ok(product);
     }
 
     @PostMapping("/admin/products")
@@ -50,40 +45,25 @@ public class ProductController {
 
     @PutMapping("/admin/products/{id}")
     @Operation(summary = "Update product details (Admin only)", description = "Updates fields of an existing product in the catalog.")
-    public ResponseEntity<?> updateProduct(@PathVariable UUID id, @RequestBody Product product) {
+    public ResponseEntity<Product> updateProduct(@PathVariable UUID id, @RequestBody Product product) {
         log.info("Request received to update product ID: {}", id);
-        try {
-            Product updated = productService.updateProduct(id, product);
-            return ResponseEntity.ok(updated);
-        } catch (IllegalArgumentException e) {
-            log.warn("Product update failed for ID {}: {}", id, e.getMessage());
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
-        }
+        Product updated = productService.updateProduct(id, product);
+        return ResponseEntity.ok(updated);
     }
 
     @PatchMapping("/admin/products/{id}/activate")
     @Operation(summary = "Activate product (Admin only)", description = "Transitions product status to ACTIVE so it can be booked by users.")
-    public ResponseEntity<?> activateProduct(@PathVariable UUID id) {
+    public ResponseEntity<Product> activateProduct(@PathVariable UUID id) {
         log.info("Request received to activate product ID: {}", id);
-        try {
-            Product activated = productService.activateProduct(id);
-            return ResponseEntity.ok(activated);
-        } catch (IllegalArgumentException e) {
-            log.warn("Product activation failed for ID {}: {}", id, e.getMessage());
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
-        }
+        Product activated = productService.activateProduct(id);
+        return ResponseEntity.ok(activated);
     }
 
     @PatchMapping("/admin/products/{id}/deactivate")
     @Operation(summary = "Deactivate product (Admin only)", description = "Transitions product status to INACTIVE so users cannot book it.")
-    public ResponseEntity<?> deactivateProduct(@PathVariable UUID id) {
+    public ResponseEntity<Product> deactivateProduct(@PathVariable UUID id) {
         log.info("Request received to deactivate product ID: {}", id);
-        try {
-            Product deactivated = productService.deactivateProduct(id);
-            return ResponseEntity.ok(deactivated);
-        } catch (IllegalArgumentException e) {
-            log.warn("Product deactivation failed for ID {}: {}", id, e.getMessage());
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
-        }
+        Product deactivated = productService.deactivateProduct(id);
+        return ResponseEntity.ok(deactivated);
     }
 }
