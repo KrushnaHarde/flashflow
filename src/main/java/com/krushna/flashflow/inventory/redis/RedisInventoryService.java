@@ -28,6 +28,11 @@ public class RedisInventoryService {
         stringRedisTemplate.opsForValue().set(STOCK_KEY_PREFIX + productId, String.valueOf(stock));
     }
 
+    public boolean setStockIfAbsent(UUID productId, int stock) {
+        Boolean success = stringRedisTemplate.opsForValue().setIfAbsent(STOCK_KEY_PREFIX + productId, String.valueOf(stock));
+        return success != null && success;
+    }
+
     public Integer getStock(UUID productId) {
         String value = stringRedisTemplate.opsForValue().get(STOCK_KEY_PREFIX + productId);
         return value != null ? Integer.parseInt(value) : null;

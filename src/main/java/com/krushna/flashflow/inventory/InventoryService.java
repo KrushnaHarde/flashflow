@@ -1,6 +1,7 @@
 package com.krushna.flashflow.inventory;
 
 import com.krushna.flashflow.inventory.redis.RedisInventoryService;
+import com.krushna.flashflow.common.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,30 +21,44 @@ public class InventoryService {
 
     public Inventory addStock(UUID productId, Integer quantity) {
         log.info("Request to add {} stock for product ID: {}", quantity, productId);
-        Inventory savedInventory = transactionTemplate.execute(status -> {
-            // Validate product exists first
-            productService.getProductById(productId);
+        int attempts = 0;
+        Inventory savedInventory = null;
+        while (true) {
+            attempts++;
+            try {
+                savedInventory = transactionTemplate.execute(status -> {
+                    // Validate product exists first
+                    productService.getProductById(productId);
 
-            Inventory inventory = inventoryRepository.findById(productId)
-                    .orElse(null);
+                    Inventory inventory = inventoryRepository.findById(productId)
+                            .orElse(null);
 
-            if (inventory == null) {
-                log.info("No existing inventory found. Creating new inventory for product ID: {}", productId);
-                inventory = Inventory.builder()
-                        .productId(productId)
-                        .totalStock(quantity)
-                        .availableStock(quantity)
-                        .reservedStock(0)
-                        .build();
-            } else {
-                log.info("Existing inventory found. Total stock was {}, available stock was {}. Incrementing by {}", 
-                        inventory.getTotalStock(), inventory.getAvailableStock(), quantity);
-                inventory.setTotalStock(inventory.getTotalStock() + quantity);
-                inventory.setAvailableStock(inventory.getAvailableStock() + quantity);
+                    if (inventory == null) {
+                        log.info("No existing inventory found. Creating new inventory for product ID: {}", productId);
+                        inventory = Inventory.builder()
+                                .productId(productId)
+                                .totalStock(quantity)
+                                .availableStock(quantity)
+                                .reservedStock(0)
+                                .build();
+                    } else {
+                        log.info("Existing inventory found. Total stock was {}, available stock was {}. Incrementing by {}", 
+                                inventory.getTotalStock(), inventory.getAvailableStock(), quantity);
+                        inventory.setTotalStock(inventory.getTotalStock() + quantity);
+                        inventory.setAvailableStock(inventory.getAvailableStock() + quantity);
+                    }
+
+                    return inventoryRepository.save(inventory);
+                });
+                break;
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                if (attempts >= 10) {
+                    throw e;
+                }
+                log.warn("Optimistic locking failure during addStock for product {}, attempt {}, retrying...", productId, attempts);
+                try { Thread.sleep(30 + new java.util.Random().nextInt(40)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw e; }
             }
-
-            return inventoryRepository.save(inventory);
-        });
+        }
 
         // Sync to Redis outside of DB transaction
         if (savedInventory != null) {
@@ -60,7 +75,7 @@ public class InventoryService {
         return inventoryRepository.findById(productId)
                 .orElseThrow(() -> {
                     log.warn("Inventory record not found in DB for product ID: {}", productId);
-                    return new IllegalArgumentException("Inventory not found for product id: " + productId);
+                    return new ResourceNotFoundException("Inventory not found for product id: " + productId);
                 });
     }
 }

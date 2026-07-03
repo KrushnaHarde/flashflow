@@ -37,4 +37,7 @@ public class Inventory {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @jakarta.persistence.Version
+    private Long version;
 }

@@ -17,14 +17,25 @@ public class PaymentRequestedConsumer {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @KafkaListener(topics = "flashflow.payments", groupId = "flashflow-group")
-    public void consume(String message) {
+    public void consume(String message) throws Exception {
         log.info("Received Kafka message from flashflow.payments topic");
-        try {
-            Order order = objectMapper.readValue(message, Order.class);
-            log.info("Successfully deserialized order ID: {} from payments topic. Processing payment...", order.getOrderId());
-            paymentFulfillmentService.fulfillPayment(order);
-        } catch (Exception e) {
-            log.error("Failed to process payment event: {}", message, e);
+        Order order = objectMapper.readValue(message, Order.class);
+        log.info("Successfully deserialized order ID: {} from payments topic. Processing payment...", order.getOrderId());
+        
+        int attempts = 0;
+        while (true) {
+            attempts++;
+            try {
+                paymentFulfillmentService.fulfillPayment(order);
+                break;
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                if (attempts >= 10) {
+                    log.error("Optimistic locking failed after 10 attempts for order {}", order.getOrderId(), e);
+                    throw e;
+                }
+                log.warn("Optimistic locking failure on attempt {} for order {}, retrying...", attempts, order.getOrderId());
+                Thread.sleep(30 + new java.util.Random().nextInt(40));
+            }
         }
     }
 }

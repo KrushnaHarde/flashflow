@@ -17,10 +17,28 @@ public class ReservationExpiryScheduler {
     @Scheduled(fixedDelay = 30000)
     public void scheduleReservationExpiry() {
         log.info("Running reservation expiry checker task...");
-        try {
-            reservationExpiryService.expireReservations();
-        } catch (Exception e) {
-            log.error("Error occurred while processing reservation expiration", e);
+        int attempts = 0;
+        while (true) {
+            attempts++;
+            try {
+                reservationExpiryService.expireReservations();
+                break;
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                if (attempts >= 10) {
+                    log.error("Reservation expiration failed after 10 attempts due to optimistic locking", e);
+                    break;
+                }
+                log.warn("Optimistic locking failure during reservation expiration, attempt {}, retrying...", attempts);
+                try {
+                    Thread.sleep(30 + new java.util.Random().nextInt(40));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            } catch (Exception e) {
+                log.error("Error occurred while processing reservation expiration", e);
+                break;
+            }
         }
     }
 }

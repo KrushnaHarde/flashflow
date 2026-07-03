@@ -1,5 +1,7 @@
 package com.krushna.flashflow.inventory;
 
+import com.krushna.flashflow.inventory.redis.RedisInventoryService;
+import com.krushna.flashflow.common.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -14,6 +16,8 @@ import java.util.UUID;
 public class ProductService {
 
     private final ProductRepository productRepository;
+    private final InventoryRepository inventoryRepository;
+    private final RedisInventoryService redisInventoryService;
 
     public List<Product> getAllProducts() {
         log.info("Fetching all products from database");
@@ -25,7 +29,7 @@ public class ProductService {
         return productRepository.findById(id)
                 .orElseThrow(() -> {
                     log.warn("Product not found with ID: {}", id);
-                    return new IllegalArgumentException("Product not found with id: " + id);
+                    return new ResourceNotFoundException("Product not found with id: " + id);
                 });
     }
 
@@ -67,6 +71,13 @@ public class ProductService {
         Product product = getProductById(id);
         product.setStatus(ProductStatus.ACTIVE);
         Product savedProduct = productRepository.save(product);
+        
+        // Warm up Redis stock when activated
+        inventoryRepository.findById(id).ifPresent(inventory -> {
+            redisInventoryService.setStock(id, inventory.getAvailableStock());
+            log.info("Warmed up Redis stock for activated product {}: {}", id, inventory.getAvailableStock());
+        });
+
         log.info("Successfully activated product ID: {}", id);
         return savedProduct;
     }
