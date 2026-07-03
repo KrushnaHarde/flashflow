@@ -6,6 +6,7 @@ import com.krushna.flashflow.inventory.InventoryService;
 import com.krushna.flashflow.inventory.Product;
 import com.krushna.flashflow.inventory.ProductService;
 import com.krushna.flashflow.inventory.ProductStatus;
+import com.krushna.flashflow.inventory.FlashSaleService;
 import com.krushna.flashflow.inventory.redis.RateLimiterService;
 import com.krushna.flashflow.inventory.redis.RedisIdempotencyService;
 import com.krushna.flashflow.inventory.redis.RedisInventoryService;
@@ -46,6 +47,7 @@ public class PurchaseService {
     private final RedisReservationService redisReservationService;
     private final OutboxEventRepository outboxEventRepository;
     private final TransactionTemplate transactionTemplate;
+    private final FlashSaleService flashSaleService;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
@@ -120,6 +122,10 @@ public class PurchaseService {
         if (product.getStatus() != ProductStatus.ACTIVE) {
             log.warn("Product {} is not active. Status: {}", productId, product.getStatus());
             throw new IllegalArgumentException("Product is not active");
+        }
+        if (!flashSaleService.isProductOnActiveSale(productId)) {
+            log.warn("Product {} sale has not started or is not active", productId);
+            throw new IllegalArgumentException("Sale has not started yet");
         }
 
         // 5. Redis Stock Check & Lazy Load (using setStockIfAbsent SETNX guarded set)
