@@ -5,11 +5,15 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
 
+import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.listener.CommonErrorHandler;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.util.backoff.FixedBackOff;
+
 @Configuration
 public class KafkaConfig {
 
-    // Skeleton configuration for Kafka
-    
     @Bean
     public NewTopic ordersTopic() {
         return TopicBuilder.name("flashflow.orders")
@@ -32,5 +36,35 @@ public class KafkaConfig {
                 .partitions(3)
                 .replicas(1)
                 .build();
+    }
+
+    @Bean
+    public NewTopic ordersDltTopic() {
+        return TopicBuilder.name("flashflow.orders.DLT")
+                .partitions(1)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic paymentsDltTopic() {
+        return TopicBuilder.name("flashflow.payments.DLT")
+                .partitions(1)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic reservationsDltTopic() {
+        return TopicBuilder.name("flashflow.reservations.DLT")
+                .partitions(1)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public CommonErrorHandler errorHandler(org.springframework.kafka.core.KafkaTemplate<String, String> template) {
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(template);
+        return new DefaultErrorHandler(recoverer, new FixedBackOff(1000L, 2L));
     }
 }
