@@ -109,11 +109,11 @@ public class ReservationExpiryIntegrationTest {
         assertNotNull(updatedReservation);
         assertEquals(ReservationStatus.EXPIRED, updatedReservation.getStatus());
 
-        // Assert: DB inventory is released back to availableStock
+        // Assert: DB inventory remains unchanged since /purchase doesn't write to DB inventory
         Inventory updatedInventory = inventoryRepository.findById(productId).orElse(null);
         assertNotNull(updatedInventory);
-        assertEquals(10, updatedInventory.getAvailableStock());
-        assertEquals(0, updatedInventory.getReservedStock());
+        assertEquals(5, updatedInventory.getAvailableStock());
+        assertEquals(5, updatedInventory.getReservedStock());
 
         // Assert: Outbox event created
         List<OutboxEvent> outboxEvents = outboxEventRepository.findAll();

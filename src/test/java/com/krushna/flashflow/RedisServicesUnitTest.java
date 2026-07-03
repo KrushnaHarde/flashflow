@@ -101,12 +101,13 @@ public class RedisServicesUnitTest {
         RedisIdempotencyService service = new RedisIdempotencyService(redisTemplate);
         ReflectionTestUtils.setField(service, "stringRedisTemplate", stringRedisTemplate);
 
+        UUID userId = UUID.randomUUID();
         String idempotencyKey = "test-idempotency-key";
-        String expectedKey = "idempotency:" + idempotencyKey;
+        String expectedKey = "idempotency:" + userId + ":" + idempotencyKey;
         UUID orderId = UUID.randomUUID();
 
         // Test saveIdempotency
-        service.saveIdempotency(idempotencyKey, "COMPLETED", "response-data", orderId, 600L);
+        service.saveIdempotency(userId, idempotencyKey, "COMPLETED", "response-data", orderId, 600L);
         
         ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(eq(expectedKey), jsonCaptor.capture(), eq(600L), eq(TimeUnit.SECONDS));
@@ -118,7 +119,7 @@ public class RedisServicesUnitTest {
 
         // Test getIdempotency
         when(valueOperations.get(eq(expectedKey))).thenReturn(capturedJson);
-        RedisIdempotencyService.IdempotencyValue cached = service.getIdempotency(idempotencyKey);
+        RedisIdempotencyService.IdempotencyValue cached = service.getIdempotency(userId, idempotencyKey);
         assertNotNull(cached);
         assertEquals("COMPLETED", cached.getStatus());
         assertEquals("response-data", cached.getResponseSnapshot());

@@ -80,6 +80,9 @@ public class PurchaseIntegrationTest {
     private OutboxEventRepository outboxEventRepository;
 
     @Autowired
+    private com.krushna.flashflow.common.OutboxPublisherScheduler outboxPublisherScheduler;
+
+    @Autowired
     private IdempotencyRepository idempotencyRepository;
 
     @Autowired
@@ -201,7 +204,7 @@ public class PurchaseIntegrationTest {
         assertEquals(ReservationStatus.ACTIVE.name(), response.getStatus());
         assertEquals(new BigDecimal("300.00"), response.getTotalAmount());
 
-        // Verify Reservation database record exists and inventory is decremented
+        // Verify Reservation database record exists and inventory is NOT decremented in DB (since it is async)
         Reservation reservation = reservationRepository.findById(response.getReservationId()).orElse(null);
         assertNotNull(reservation);
         assertEquals(ReservationStatus.ACTIVE, reservation.getStatus());
@@ -209,8 +212,11 @@ public class PurchaseIntegrationTest {
 
         Inventory updatedInventory = inventoryRepository.findById(activeProduct.getProductId()).orElse(null);
         assertNotNull(updatedInventory);
-        assertEquals(98, updatedInventory.getAvailableStock());
-        assertEquals(2, updatedInventory.getReservedStock());
+        assertEquals(100, updatedInventory.getAvailableStock());
+        assertEquals(0, updatedInventory.getReservedStock());
+
+        // Publish outbox event to Kafka via scheduler
+        outboxPublisherScheduler.publishPendingEvents();
 
         // Verify Kafka event published
         verify(mockKafkaTemplate).send(eq("flashflow.orders"), eq(response.getReservationId().toString()), anyString());
@@ -244,13 +250,17 @@ public class PurchaseIntegrationTest {
         assertEquals(PaymentStatus.PENDING, payment.getStatus());
 
         List<OutboxEvent> outboxEvents = outboxEventRepository.findAll();
-        assertEquals(1, outboxEvents.size());
-        assertEquals("ORDER_CREATED", outboxEvents.get(0).getEventType());
+        assertEquals(2, outboxEvents.size());
+        boolean hasOrderRequested = outboxEvents.stream().anyMatch(e -> "ORDER_REQUESTED".equals(e.getEventType()));
+        boolean hasOrderCreated = outboxEvents.stream().anyMatch(e -> "ORDER_CREATED".equals(e.getEventType()));
+        assertTrue(hasOrderRequested, "Should have ORDER_REQUESTED outbox event");
+        assertTrue(hasOrderCreated, "Should have ORDER_CREATED outbox event");
 
-        // Finalized DB inventory: total stock is decremented and reserved stock goes back to 0
+        // Finalized DB inventory: total stock and available stock are decremented, reserved stock remains 0
         Inventory finalInventory = inventoryRepository.findById(activeProduct.getProductId()).orElse(null);
         assertNotNull(finalInventory);
         assertEquals(98, finalInventory.getTotalStock());
+        assertEquals(98, finalInventory.getAvailableStock());
         assertEquals(0, finalInventory.getReservedStock());
 
         // DB Reservation status updated to CONFIRMED
@@ -258,10 +268,10 @@ public class PurchaseIntegrationTest {
         assertNotNull(finalReservation);
         assertEquals(ReservationStatus.CONFIRMED, finalReservation.getStatus());
 
-        // DB Idempotency updated to COMPLETED
-        Idempotency idempotency = idempotencyRepository.findById("idemp-key-1").orElse(null);
+        // DB Idempotency updated to ORDER_CREATED
+        Idempotency idempotency = idempotencyRepository.findById(new com.krushna.flashflow.order.IdempotencyId("idemp-key-1", normalUser.getUserId())).orElse(null);
         assertNotNull(idempotency);
-        assertEquals(IdempotencyStatus.COMPLETED, idempotency.getStatus());
+        assertEquals(IdempotencyStatus.ORDER_CREATED, idempotency.getStatus());
         assertEquals(order.getOrderId(), idempotency.getOrderId());
     }
 
@@ -281,5 +291,89 @@ public class PurchaseIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isTooManyRequests());
+    }
+
+    @Test
+    void testConcurrentOrderFulfillment() throws Exception {
+        UUID productId = activeProduct.getProductId();
+        int n = 5;
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(n);
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(n);
+
+        java.util.concurrent.atomic.AtomicInteger successCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger failureCount = new java.util.concurrent.atomic.AtomicInteger(0);
+
+        for (int i = 0; i < n; i++) {
+            final int index = i;
+            UUID userId = UUID.randomUUID();
+            UUID reservationId = UUID.randomUUID();
+
+            User user = User.builder()
+                    .userId(userId)
+                    .name("Concurrent User " + index)
+                    .email("concurrent" + index + "@example.com")
+                    .password("pass")
+                    .role(Role.USER)
+                    .enabled(true)
+                    .createdAt(java.time.LocalDateTime.now())
+                    .build();
+            userRepository.save(user);
+
+            Reservation reservation = Reservation.builder()
+                    .reservationId(reservationId)
+                    .userId(userId)
+                    .productId(productId)
+                    .quantity(2)
+                    .unitPrice(new BigDecimal("150.00"))
+                    .totalAmount(new BigDecimal("300.00"))
+                    .status(ReservationStatus.ACTIVE)
+                    .expiresAt(java.time.LocalDateTime.now().plusMinutes(5))
+                    .createdAt(java.time.LocalDateTime.now())
+                    .build();
+            reservationRepository.save(reservation);
+
+            Idempotency idempotency = Idempotency.builder()
+                    .idempotencyKey("idem-concurrent-" + index)
+                    .userId(userId)
+                    .productId(productId)
+                    .status(IdempotencyStatus.PROCESSING)
+                    .createdAt(java.time.LocalDateTime.now())
+                    .build();
+            idempotencyRepository.save(idempotency);
+
+            OrderRequestedEvent event = OrderRequestedEvent.builder()
+                    .reservationId(reservationId)
+                    .userId(userId)
+                    .productId(productId)
+                    .quantity(2)
+                    .totalAmount(new BigDecimal("300.00"))
+                    .idempotencyKey("idem-concurrent-" + index)
+                    .build();
+
+            executor.submit(() -> {
+                try {
+                    latch.await();
+                    orderRequestedConsumer.consume(objectMapper.writeValueAsString(event));
+                    successCount.incrementAndGet();
+                } catch (Exception e) {
+                    failureCount.incrementAndGet();
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+        }
+
+        latch.countDown();
+        doneLatch.await();
+        executor.shutdown();
+
+        assertEquals(n, successCount.get());
+        assertEquals(0, failureCount.get());
+
+        Inventory finalInventory = inventoryRepository.findById(productId).orElse(null);
+        assertNotNull(finalInventory);
+        assertEquals(90, finalInventory.getAvailableStock());
+        assertEquals(90, finalInventory.getTotalStock());
     }
 }

@@ -226,11 +226,12 @@ public class OutboxPatternIntegrationTest {
         assertNotNull(finalReservation);
         assertEquals(ReservationStatus.CANCELLED, finalReservation.getStatus());
 
-        // Assert Inventory stock released: availableStock increases, reservedStock decreases
+        // Assert Inventory stock released: availableStock increases, totalStock increases, reservedStock remains untouched (10)
         Inventory finalInventory = inventoryRepository.findById(productId).orElse(null);
         assertNotNull(finalInventory);
         assertEquals(95, finalInventory.getAvailableStock());
-        assertEquals(5, finalInventory.getReservedStock());
+        assertEquals(105, finalInventory.getTotalStock());
+        assertEquals(10, finalInventory.getReservedStock());
     }
 
     @Test
