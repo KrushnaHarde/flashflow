@@ -246,4 +246,47 @@ public class AuthenticationIntegrationTest {
         assertNotEquals(401, adminProductStatus);
         assertNotEquals(403, adminProductStatus);
     }
+
+    @Test
+    void testCsrfProtection() throws Exception {
+        // Pre-register user
+        User user = User.builder()
+                .userId(UUID.randomUUID())
+                .name("CSRF Test")
+                .email("csrf@example.com")
+                .password(passwordEncoder.encode("password"))
+                .role(Role.USER)
+                .enabled(true)
+                .build();
+        userRepository.save(user);
+
+        // Login to get cookies
+        MvcResult loginResult = mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new LoginRequest("csrf@example.com", "password"))))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        jakarta.servlet.http.Cookie rtCookie = loginResult.getResponse().getCookie("rt_flashflow");
+        jakarta.servlet.http.Cookie csrfCookie = loginResult.getResponse().getCookie("csrf_flashflow");
+        assertNotNull(rtCookie);
+        assertNotNull(csrfCookie);
+
+        // 1. Refreshing without CSRF token header should fail with 400 Bad Request (missing header)
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(rtCookie))
+                .andExpect(status().isBadRequest());
+
+        // 2. Refreshing with incorrect CSRF token header should fail with 400 Bad Request (IllegalArgumentException mapped)
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(rtCookie)
+                        .header("X-CSRF-Token", "invalid-csrf-token"))
+                .andExpect(status().isBadRequest());
+
+        // 3. Refreshing with correct CSRF token header should succeed
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(rtCookie)
+                        .header("X-CSRF-Token", csrfCookie.getValue()))
+                .andExpect(status().isOk());
+    }
 }
