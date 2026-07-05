@@ -3,7 +3,7 @@ import axios from 'axios';
 import { setupInterceptors } from '../services/api';
 import authApi from '../services/authApi';
 
-const AuthContext = createContext(null);
+export const AuthContext = createContext(null);
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
