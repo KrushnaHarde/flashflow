@@ -40,7 +40,7 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints
-                .requestMatchers("/api/v1/auth/**", "/auth/**", "/health", "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                .requestMatchers("/api/v1/auth/**", "/auth/**", "/health", "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/actuator/**").permitAll()
                 
                 // Admin Only endpoints
                 .requestMatchers(HttpMethod.POST, "/admin/products").hasRole("ADMIN")
@@ -48,6 +48,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PATCH, "/admin/products/**").hasRole("ADMIN")
                 .requestMatchers("/admin/inventory", "/admin/inventory/**").hasRole("ADMIN")
                 .requestMatchers("/admin/orders", "/admin/orders/**", "/admin/reservations", "/admin/reservations/**").hasRole("ADMIN")
+                .requestMatchers("/admin/dlt/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/admin/sales").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/admin/sales/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/admin/sales/**").hasRole("ADMIN")
