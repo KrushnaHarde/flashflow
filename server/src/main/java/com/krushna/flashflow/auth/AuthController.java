@@ -45,26 +45,105 @@ public class AuthController {
     public ResponseEntity<AuthResponse> login(@RequestBody LoginRequest request) {
         log.info("Received login request for user: {}", request.getEmail());
         AuthResponse response = authenticationService.login(request);
+        
+        org.springframework.http.ResponseCookie cookie = org.springframework.http.ResponseCookie.from("rt_flashflow", response.getRefreshToken())
+                .httpOnly(true)
+                .secure(true)
+                .path("/api/v1/auth")
+                .maxAge(7 * 24 * 60 * 60)
+                .sameSite("Strict")
+                .build();
+
+        org.springframework.http.ResponseCookie csrfCookie = org.springframework.http.ResponseCookie.from("csrf_flashflow", response.getCsrfToken())
+                .httpOnly(false)
+                .secure(true)
+                .path("/")
+                .maxAge(7 * 24 * 60 * 60)
+                .sameSite("Strict")
+                .build();
+        
+        // Hide refresh token from client JSON body
+        response.setRefreshToken(null);
+        
         log.info("Successfully logged in user: {}", request.getEmail());
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.SET_COOKIE, cookie.toString())
+                .header(org.springframework.http.HttpHeaders.SET_COOKIE, csrfCookie.toString())
+                .body(response);
     }
 
     @PostMapping("/refresh")
     @Operation(summary = "Refresh JWT access token", description = "Validates the refresh token and returns a new JWT access token.")
-    public ResponseEntity<AuthResponse> refresh(@RequestBody RefreshRequest request) {
+    public ResponseEntity<AuthResponse> refresh(
+            @org.springframework.web.bind.annotation.CookieValue(name = "rt_flashflow", required = false) String refreshToken,
+            @org.springframework.web.bind.annotation.RequestHeader(name = "X-CSRF-Token", required = false) String csrfToken) {
         log.info("Received token refresh request");
-        AuthResponse response = authenticationService.refresh(request);
+        if (refreshToken == null || refreshToken.isEmpty()) {
+            throw new IllegalArgumentException("Refresh token is missing");
+        }
+        if (csrfToken == null || csrfToken.isEmpty()) {
+            throw new IllegalArgumentException("CSRF token is missing");
+        }
+        
+        AuthResponse response = authenticationService.refresh(refreshToken, csrfToken);
+        
+        org.springframework.http.ResponseCookie cookie = org.springframework.http.ResponseCookie.from("rt_flashflow", response.getRefreshToken())
+                .httpOnly(true)
+                .secure(true)
+                .path("/api/v1/auth")
+                .maxAge(7 * 24 * 60 * 60)
+                .sameSite("Strict")
+                .build();
+
+        org.springframework.http.ResponseCookie csrfCookie = org.springframework.http.ResponseCookie.from("csrf_flashflow", response.getCsrfToken())
+                .httpOnly(false)
+                .secure(true)
+                .path("/")
+                .maxAge(7 * 24 * 60 * 60)
+                .sameSite("Strict")
+                .build();
+        
+        // Hide refresh token from client JSON body
+        response.setRefreshToken(null);
+        
         log.info("Successfully refreshed access token");
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.SET_COOKIE, cookie.toString())
+                .header(org.springframework.http.HttpHeaders.SET_COOKIE, csrfCookie.toString())
+                .body(response);
     }
 
     @PostMapping("/logout")
     @Operation(summary = "Logout user", description = "Invalidates the refresh token by deleting it from the database.")
-    public ResponseEntity<Void> logout(@RequestBody LogoutRequest request) {
+    public ResponseEntity<Void> logout(
+            @org.springframework.web.bind.annotation.CookieValue(name = "rt_flashflow", required = false) String refreshToken,
+            @org.springframework.web.bind.annotation.RequestHeader(name = "X-CSRF-Token", required = false) String csrfToken) {
         log.info("Received logout request");
-        authenticationService.logout(request);
+        if (refreshToken != null && csrfToken != null && !refreshToken.isEmpty() && !csrfToken.isEmpty()) {
+            authenticationService.logout(refreshToken, csrfToken);
+        }
+        
+        org.springframework.http.ResponseCookie cookie = org.springframework.http.ResponseCookie.from("rt_flashflow", "")
+                .httpOnly(true)
+                .secure(true)
+                .path("/api/v1/auth")
+                .maxAge(0)
+                .sameSite("Strict")
+                .build();
+
+        org.springframework.http.ResponseCookie csrfCookie = org.springframework.http.ResponseCookie.from("csrf_flashflow", "")
+                .httpOnly(false)
+                .secure(true)
+                .path("/")
+                .maxAge(0)
+                .sameSite("Strict")
+                .build();
+        
         log.info("Successfully logged out user");
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok()
+                .header(org.springframework.http.HttpHeaders.SET_COOKIE, cookie.toString())
+                .header(org.springframework.http.HttpHeaders.SET_COOKIE, csrfCookie.toString())
+                .build();
     }
 
     @org.springframework.web.bind.annotation.GetMapping("/me")

@@ -5,15 +5,27 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
 const api = axios.create({
   baseURL: API_URL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
+let requestInterceptorId = null;
+let responseInterceptorId = null;
+
 // Configure dynamic interceptor attachment to link to React AuthContext
 export const setupInterceptors = (getAccessToken, refreshAuthToken, logout) => {
+  // Eject previous interceptors if they exist
+  if (requestInterceptorId !== null) {
+    api.interceptors.request.eject(requestInterceptorId);
+  }
+  if (responseInterceptorId !== null) {
+    api.interceptors.response.eject(responseInterceptorId);
+  }
+
   // Request Interceptor: Attach JWT token
-  api.interceptors.request.use(
+  requestInterceptorId = api.interceptors.request.use(
     (config) => {
       const token = getAccessToken();
       if (token) {
@@ -25,7 +37,7 @@ export const setupInterceptors = (getAccessToken, refreshAuthToken, logout) => {
   );
 
   // Response Interceptor: Handle global errors and 401 JWT refreshes
-  api.interceptors.response.use(
+  responseInterceptorId = api.interceptors.response.use(
     (response) => response,
     async (error) => {
       const originalRequest = error.config;

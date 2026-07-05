@@ -118,7 +118,8 @@ public class AuthenticationIntegrationTest {
         String responseBody = result.getResponse().getContentAsString();
         AuthResponse authResponse = objectMapper.readValue(responseBody, AuthResponse.class);
         assertNotNull(authResponse.getAccessToken());
-        assertNotNull(authResponse.getRefreshToken());
+        assertNotNull(result.getResponse().getCookie("rt_flashflow"));
+        assertNotNull(result.getResponse().getCookie("csrf_flashflow"));
         assertTrue(authResponse.getExpiresIn() > 0);
 
         // Login with wrong credentials
@@ -157,29 +158,28 @@ public class AuthenticationIntegrationTest {
                         .content(objectMapper.writeValueAsString(loginRequest)))
                 .andReturn();
 
-        AuthResponse initialTokens = objectMapper.readValue(loginResult.getResponse().getContentAsString(), AuthResponse.class);
-        String oldRefreshToken = initialTokens.getRefreshToken();
+        jakarta.servlet.http.Cookie rtCookie = loginResult.getResponse().getCookie("rt_flashflow");
+        jakarta.servlet.http.Cookie csrfCookie = loginResult.getResponse().getCookie("csrf_flashflow");
+        assertNotNull(rtCookie);
+        assertNotNull(csrfCookie);
 
         // Refresh with valid token
-        RefreshRequest refreshRequest = RefreshRequest.builder()
-                .refreshToken(oldRefreshToken)
-                .build();
-
         MvcResult refreshResult = mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(refreshRequest)))
+                        .cookie(rtCookie)
+                        .header("X-CSRF-Token", csrfCookie.getValue()))
                 .andExpect(status().isOk())
                 .andReturn();
 
         AuthResponse rotatedTokens = objectMapper.readValue(refreshResult.getResponse().getContentAsString(), AuthResponse.class);
         assertNotNull(rotatedTokens.getAccessToken());
-        assertNotNull(rotatedTokens.getRefreshToken());
-        assertNotEquals(oldRefreshToken, rotatedTokens.getRefreshToken());
+        jakarta.servlet.http.Cookie newRtCookie = refreshResult.getResponse().getCookie("rt_flashflow");
+        assertNotNull(newRtCookie);
+        assertNotEquals(rtCookie.getValue(), newRtCookie.getValue());
 
         // Refreshing with the old (rotated) token should fail
         mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(refreshRequest)))
+                        .cookie(rtCookie)
+                        .header("X-CSRF-Token", csrfCookie.getValue()))
                 .andExpect(status().isBadRequest());
     }
 

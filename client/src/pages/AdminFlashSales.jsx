@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
 import adminApi from '../services/adminApi';
 import productApi from '../services/productApi';
 import Card, { CardBody, CardHeader } from '../components/Card';
@@ -8,7 +9,7 @@ import Spinner from '../components/Spinner';
 import Button from '../components/Button';
 import Input from '../components/Input';
 import ConfirmationModal from '../components/ConfirmationModal';
-import { ArrowLeft, RefreshCw, Calendar, Trash2, Clock, Check } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Calendar, Trash2, Clock } from 'lucide-react';
 import { toast } from 'react-toastify';
 
 export const AdminFlashSales = () => {
@@ -18,11 +19,17 @@ export const AdminFlashSales = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Form State
-  const [saleName, setSaleName] = useState('');
-  const [startTime, setStartTime] = useState('');
-  const [endTime, setEndTime] = useState('');
-  const [selectedProductIds, setSelectedProductIds] = useState([]);
+  // react-hook-form
+  const { register, handleSubmit, reset, setValue, watch } = useForm({
+    defaultValues: {
+      name: '',
+      startTime: '',
+      endTime: '',
+      productIds: [],
+    },
+  });
+
+  const watchedProductIds = watch('productIds') || [];
 
   // Modal State
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
@@ -68,28 +75,27 @@ export const AdminFlashSales = () => {
   };
 
   const handleProductToggle = (productId) => {
-    setSelectedProductIds((prev) =>
-      prev.includes(productId)
-        ? prev.filter((id) => id !== productId)
-        : [...prev, productId]
-    );
+    const current = watchedProductIds;
+    const next = current.includes(productId)
+      ? current.filter((id) => id !== productId)
+      : [...current, productId];
+    setValue('productIds', next, { shouldValidate: true });
   };
 
-  const handleScheduleSale = async (e) => {
-    e.preventDefault();
-    if (!saleName) {
+  const onSubmit = async (data) => {
+    if (!data.name) {
       toast.error('Please enter a sale name.');
       return;
     }
-    if (!startTime) {
+    if (!data.startTime) {
       toast.error('Please select a start time.');
       return;
     }
-    if (endTime && new Date(endTime) <= new Date(startTime)) {
+    if (data.endTime && new Date(data.endTime) <= new Date(data.startTime)) {
       toast.error('End time must be after the start time.');
       return;
     }
-    if (selectedProductIds.length === 0) {
+    if (data.productIds.length === 0) {
       toast.error('Please select at least one product.');
       return;
     }
@@ -101,27 +107,21 @@ export const AdminFlashSales = () => {
         : Math.random().toString(36).substring(2) + Date.now().toString(36);
 
       // Backend expects LocalDateTime fields in ISO-8601 format: YYYY-MM-DDTHH:MM:SS
-      const formattedStart = new Date(startTime).toISOString().slice(0, 19);
-      const formattedEnd = endTime ? new Date(endTime).toISOString().slice(0, 19) : null;
+      const formattedStart = new Date(data.startTime).toISOString().slice(0, 19);
+      const formattedEnd = data.endTime ? new Date(data.endTime).toISOString().slice(0, 19) : null;
 
       const salePayload = {
         saleId,
-        name: saleName,
+        name: data.name,
         startTime: formattedStart,
         endTime: formattedEnd,
-        productIds: selectedProductIds,
+        productIds: data.productIds,
       };
 
       await adminApi.createFlashSale(salePayload);
       toast.success('Flash sale scheduled successfully!');
       
-      // Reset form
-      setSaleName('');
-      setStartTime('');
-      setEndTime('');
-      setSelectedProductIds([]);
-      
-      // Reload
+      reset();
       fetchData();
     } catch (error) {
       console.error('Error creating flash sale:', error);
@@ -257,26 +257,23 @@ export const AdminFlashSales = () => {
               Schedule New Flash Sale
             </CardHeader>
             <CardBody>
-              <form onSubmit={handleScheduleSale} className="space-y-4">
+              <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
                 <Input
                   label="Sale Name"
                   placeholder="e.g. Black Friday Flash"
-                  value={saleName}
-                  onChange={(e) => setSaleName(e.target.value)}
+                  {...register('name')}
                 />
 
                 <Input
                   label="Start Date & Time"
                   type="datetime-local"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
+                  {...register('startTime')}
                 />
 
                 <Input
                   label="End Date & Time (Optional)"
                   type="datetime-local"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
+                  {...register('endTime')}
                 />
 
                 {/* Product Association checkboxes */}
@@ -296,7 +293,7 @@ export const AdminFlashSales = () => {
                           <input
                             type="checkbox"
                             className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 mr-2.5 h-4 w-4"
-                            checked={selectedProductIds.includes(p.productId)}
+                            checked={watchedProductIds.includes(p.productId)}
                             onChange={() => handleProductToggle(p.productId)}
                           />
                           <div className="flex-grow">

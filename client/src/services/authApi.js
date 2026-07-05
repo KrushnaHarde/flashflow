@@ -9,12 +9,20 @@ export const authApi = {
     const response = await api.post('/api/v1/auth/register', { name, email, password });
     return response.data;
   },
-  refresh: async (refreshToken) => {
-    const response = await api.post('/api/v1/auth/refresh', { refreshToken });
+  refresh: async (csrfToken) => {
+    const response = await api.post('/api/v1/auth/refresh', {}, {
+      headers: {
+        'X-CSRF-Token': csrfToken
+      }
+    });
     return response.data;
   },
-  logout: async (refreshToken) => {
-    const response = await api.post('/api/v1/auth/logout', { refreshToken });
+  logout: async (csrfToken) => {
+    const response = await api.post('/api/v1/auth/logout', {}, {
+      headers: {
+        'X-CSRF-Token': csrfToken
+      }
+    });
     return response.data;
   },
   getMe: async () => {

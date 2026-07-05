@@ -12,4 +12,10 @@ public interface FlashSaleRepository extends JpaRepository<FlashSale, UUID> {
 
     @Query("SELECT s FROM FlashSale s JOIN s.productIds p WHERE p = :productId AND s.startTime <= :now AND (s.endTime IS NULL OR s.endTime >= :now)")
     List<FlashSale> findActiveSalesForProduct(@Param("productId") UUID productId, @Param("now") LocalDateTime now);
+
+    @Query("SELECT s FROM FlashSale s WHERE s.startTime <= :now AND (s.endTime IS NULL OR s.endTime >= :now)")
+    List<FlashSale> findAllActiveSales(@Param("now") LocalDateTime now);
+
+    @Query("SELECT COUNT(s) > 0 FROM FlashSale s JOIN s.productIds p WHERE p = :productId")
+    boolean existsByProductId(@Param("productId") UUID productId);
 }

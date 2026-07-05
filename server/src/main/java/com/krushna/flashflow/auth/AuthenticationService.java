@@ -49,6 +49,14 @@ public class AuthenticationService {
         return savedUser;
     }
 
+    private java.util.Map<String, Object> buildClaims(User user) {
+        java.util.Map<String, Object> claims = new java.util.HashMap<>();
+        claims.put("role", user.getRole().name());
+        claims.put("userId", user.getUserId().toString());
+        claims.put("name", user.getName());
+        return claims;
+    }
+
     @Transactional
     public AuthResponse login(LoginRequest request) {
         log.info("Attempting to authenticate user: {}", request.getEmail());
@@ -65,12 +73,10 @@ public class AuthenticationService {
                     return new IllegalArgumentException("User not found");
                 });
 
-        java.util.Map<String, Object> claims = new java.util.HashMap<>();
-        claims.put("role", user.getRole().name());
-        claims.put("userId", user.getUserId().toString());
-        claims.put("name", user.getName());
+        java.util.Map<String, Object> claims = buildClaims(user);
         String accessToken = jwtService.generateToken(claims, user.getEmail());
         String refreshTokenString = UUID.randomUUID().toString();
+        String csrfToken = UUID.randomUUID().toString();
 
         log.info("Generating new refresh token for user ID: {}", user.getUserId());
         // Save new refresh token (7 days TTL)
@@ -79,6 +85,7 @@ public class AuthenticationService {
                 .token(refreshTokenString)
                 .userId(user.getUserId())
                 .expiryDate(Instant.now().plus(7, ChronoUnit.DAYS))
+                .csrfToken(csrfToken)
                 .build();
 
         refreshTokenRepository.save(refreshToken);
@@ -87,14 +94,15 @@ public class AuthenticationService {
         return AuthResponse.builder()
                 .accessToken(accessToken)
                 .refreshToken(refreshTokenString)
+                .csrfToken(csrfToken)
                 .expiresIn(jwtService.getExpirationTime())
                 .build();
     }
 
     @Transactional
-    public AuthResponse refresh(RefreshRequest request) {
+    public AuthResponse refresh(String refreshToken, String csrfToken) {
         log.info("Attempting token refresh operation");
-        RefreshToken oldRefreshToken = refreshTokenRepository.findByToken(request.getRefreshToken())
+        RefreshToken oldRefreshToken = refreshTokenRepository.findByToken(refreshToken)
                 .orElseThrow(() -> {
                     log.warn("Token refresh aborted. Provided refresh token is invalid");
                     return new IllegalArgumentException("Invalid refresh token");
@@ -104,6 +112,12 @@ public class AuthenticationService {
             log.warn("Token refresh aborted. Refresh token is expired. Removing token ID: {}", oldRefreshToken.getTokenId());
             refreshTokenRepository.delete(oldRefreshToken);
             throw new IllegalArgumentException("Refresh token expired");
+        }
+
+        // Double-submit CSRF Token validation
+        if (oldRefreshToken.getCsrfToken() != null && !oldRefreshToken.getCsrfToken().equals(csrfToken)) {
+            log.warn("CSRF token mismatch. Expected: {}, Received: {}", oldRefreshToken.getCsrfToken(), csrfToken);
+            throw new IllegalArgumentException("CSRF token validation failed");
         }
 
         User user = userRepository.findById(oldRefreshToken.getUserId())
@@ -117,18 +131,17 @@ public class AuthenticationService {
         refreshTokenRepository.delete(oldRefreshToken);
 
         // Generate new access and refresh tokens
-        java.util.Map<String, Object> claims = new java.util.HashMap<>();
-        claims.put("role", user.getRole().name());
-        claims.put("userId", user.getUserId().toString());
-        claims.put("name", user.getName());
+        java.util.Map<String, Object> claims = buildClaims(user);
         String newAccessToken = jwtService.generateToken(claims, user.getEmail());
         String newRefreshTokenString = UUID.randomUUID().toString();
+        String newCsrfToken = UUID.randomUUID().toString();
 
         RefreshToken newRefreshToken = RefreshToken.builder()
                 .tokenId(UUID.randomUUID())
                 .token(newRefreshTokenString)
                 .userId(user.getUserId())
                 .expiryDate(Instant.now().plus(7, ChronoUnit.DAYS))
+                .csrfToken(newCsrfToken)
                 .build();
 
         refreshTokenRepository.save(newRefreshToken);
@@ -137,16 +150,21 @@ public class AuthenticationService {
         return AuthResponse.builder()
                 .accessToken(newAccessToken)
                 .refreshToken(newRefreshTokenString)
+                .csrfToken(newCsrfToken)
                 .expiresIn(jwtService.getExpirationTime())
                 .build();
     }
 
     @Transactional
-    public void logout(LogoutRequest request) {
+    public void logout(String refreshToken, String csrfToken) {
         log.info("Processing logout request...");
-        if (request.getRefreshToken() != null) {
-            refreshTokenRepository.findByToken(request.getRefreshToken())
+        if (refreshToken != null) {
+            refreshTokenRepository.findByToken(refreshToken)
                     .ifPresent(token -> {
+                        if (token.getCsrfToken() != null && !token.getCsrfToken().equals(csrfToken)) {
+                            log.warn("Logout aborted. CSRF token mismatch.");
+                            throw new IllegalArgumentException("CSRF token validation failed");
+                        }
                         refreshTokenRepository.delete(token);
                         log.info("Deleted refresh token from database during logout");
                     });

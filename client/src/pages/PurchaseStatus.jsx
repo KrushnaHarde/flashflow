@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import purchaseApi from '../services/purchaseApi';
 import Card, { CardBody, CardHeader, CardFooter } from '../components/Card';
@@ -13,14 +13,14 @@ export const PurchaseStatus = () => {
   const [statusInfo, setStatusInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [polling, setPolling] = useState(true);
-  const [errorCount, setErrorCount] = useState(0);
+  const errorCountRef = useRef(0);
 
   const fetchStatus = async () => {
     try {
       const data = await purchaseApi.getPurchaseStatus(reservationId);
       setStatusInfo(data);
       setLoading(false);
-      setErrorCount(0); // Reset errors on successful query
+      errorCountRef.current = 0; // Reset errors on successful query
 
       // Terminal conditions to stop polling
       const isReservationTerminal = ['EXPIRED', 'CANCELLED'].includes(data.reservationStatus);
@@ -31,10 +31,10 @@ export const PurchaseStatus = () => {
       }
     } catch (error) {
       console.error('Error polling reservation status:', error);
-      setErrorCount((prev) => prev + 1);
+      errorCountRef.current += 1;
       
       // Stop polling after too many errors
-      if (errorCount > 5) {
+      if (errorCountRef.current > 5) {
         setPolling(false);
         setLoading(false);
         toast.error('Unable to fetch checkout progress. Please check orders page.');
@@ -52,7 +52,7 @@ export const PurchaseStatus = () => {
     const interval = setInterval(fetchStatus, 2000);
 
     return () => clearInterval(interval);
-  }, [reservationId, polling, errorCount]);
+  }, [reservationId, polling]);
 
   // Determine Overall Status Color, Message, and Icon
   let statusColor = 'bg-blue-50 border-blue-200 text-blue-800';
@@ -108,7 +108,7 @@ export const PurchaseStatus = () => {
                 <span className="text-slate-500">Stock Reservation</span>
                 <Badge
                   variant={
-                    statusInfo.reservationStatus === 'RESERVED'
+                    statusInfo.reservationStatus === 'ACTIVE' || statusInfo.reservationStatus === 'CONFIRMED'
                       ? 'success'
                       : statusInfo.reservationStatus === 'EXPIRED' || statusInfo.reservationStatus === 'CANCELLED'
                       ? 'danger'
@@ -125,9 +125,9 @@ export const PurchaseStatus = () => {
                   variant={
                     statusInfo.orderStatus === 'CONFIRMED'
                       ? 'success'
-                      : statusInfo.orderStatus === 'PENDING'
+                      : statusInfo.orderStatus === 'CREATED'
                       ? 'info'
-                      : statusInfo.orderStatus === 'FAILED'
+                      : statusInfo.orderStatus === 'FAILED' || statusInfo.orderStatus === 'CANCELLED'
                       ? 'danger'
                       : 'default'
                   }
@@ -140,7 +140,7 @@ export const PurchaseStatus = () => {
                 <span className="text-slate-500">Payment Process</span>
                 <Badge
                   variant={
-                    statusInfo.paymentStatus === 'COMPLETED'
+                    statusInfo.paymentStatus === 'SUCCESS'
                       ? 'success'
                       : statusInfo.paymentStatus === 'PENDING'
                       ? 'info'

@@ -33,6 +33,13 @@ const decodeToken = (token) => {
   }
 };
 
+const getCookie = (name) => {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+  return null;
+};
+
 export const AuthProvider = ({ children }) => {
   const [accessToken, setAccessToken] = useState(null);
   const [user, setUser] = useState(null);
@@ -40,17 +47,16 @@ export const AuthProvider = ({ children }) => {
 
   // Function to perform authentication token refresh
   const refreshAuthToken = async () => {
-    const storedRefreshToken = localStorage.getItem('rt_flashflow');
-    if (!storedRefreshToken) {
+    const storedCsrf = getCookie('csrf_flashflow');
+    if (!storedCsrf) {
       setLoading(false);
       return null;
     }
     try {
-      const data = await authApi.refresh(storedRefreshToken);
-      const { accessToken: newAccessToken, refreshToken: newRefreshToken } = data;
+      const data = await authApi.refresh(storedCsrf);
+      const { accessToken: newAccessToken } = data;
       
       setAccessToken(newAccessToken);
-      localStorage.setItem('rt_flashflow', newRefreshToken);
       const decoded = decodeToken(newAccessToken);
       setUser(decoded);
       return newAccessToken;
@@ -79,9 +85,8 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       const data = await authApi.login(email, password);
-      const { accessToken: token, refreshToken: rt } = data;
+      const { accessToken: token } = data;
       setAccessToken(token);
-      localStorage.setItem('rt_flashflow', rt);
       const decoded = decodeToken(token);
       setUser(decoded);
       return { success: true, user: decoded };
@@ -106,15 +111,14 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
-    const rt = localStorage.getItem('rt_flashflow');
-    if (rt) {
+    const csrf = getCookie('csrf_flashflow');
+    if (csrf) {
       try {
-        await authApi.logout(rt);
+        await authApi.logout(csrf);
       } catch (err) {
         console.error('Logout error on server:', err);
       }
     }
-    localStorage.removeItem('rt_flashflow');
     setAccessToken(null);
     setUser(null);
     setLoading(false);

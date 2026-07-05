@@ -124,8 +124,13 @@ public class PurchaseService {
             throw new IllegalArgumentException("Product is not active");
         }
         if (!flashSaleService.isProductOnActiveSale(productId)) {
-            log.warn("Product {} sale has not started or is not active", productId);
-            throw new IllegalArgumentException("Sale has not started yet");
+            if (!flashSaleService.isProductInAnySale(productId)) {
+                log.warn("Product {} is not associated with any flash sale", productId);
+                throw new IllegalArgumentException("Product is not part of any flash sale");
+            } else {
+                log.warn("Product {} sale has not started or is not active", productId);
+                throw new IllegalArgumentException("Flash sale is not currently active for this product");
+            }
         }
 
         // 5. Redis Stock Check & Lazy Load (using setStockIfAbsent SETNX guarded set)

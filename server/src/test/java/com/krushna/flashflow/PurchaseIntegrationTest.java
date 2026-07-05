@@ -115,6 +115,9 @@ public class PurchaseIntegrationTest {
     @MockitoBean
     private RedisIdempotencyService redisIdempotencyService;
 
+    @MockitoBean
+    private com.krushna.flashflow.inventory.redis.RedisFlashSaleService redisFlashSaleService;
+
     @Autowired
     private KafkaTemplate<String, String> mockKafkaTemplate;
 
@@ -134,6 +137,7 @@ public class PurchaseIntegrationTest {
         // Mock KafkaTemplate return value to avoid NPEs
         when(mockKafkaTemplate.send(anyString(), anyString(), anyString()))
                 .thenReturn(CompletableFuture.completedFuture(null));
+        when(redisFlashSaleService.isProductOnActiveSale(any(UUID.class))).thenReturn(true);
 
         orderRepository.deleteAll();
         paymentRepository.deleteAll();
