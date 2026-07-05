@@ -65,7 +65,11 @@ public class AuthenticationService {
                     return new IllegalArgumentException("User not found");
                 });
 
-        String accessToken = jwtService.generateToken(user.getEmail());
+        java.util.Map<String, Object> claims = new java.util.HashMap<>();
+        claims.put("role", user.getRole().name());
+        claims.put("userId", user.getUserId().toString());
+        claims.put("name", user.getName());
+        String accessToken = jwtService.generateToken(claims, user.getEmail());
         String refreshTokenString = UUID.randomUUID().toString();
 
         log.info("Generating new refresh token for user ID: {}", user.getUserId());
@@ -113,7 +117,11 @@ public class AuthenticationService {
         refreshTokenRepository.delete(oldRefreshToken);
 
         // Generate new access and refresh tokens
-        String newAccessToken = jwtService.generateToken(user.getEmail());
+        java.util.Map<String, Object> claims = new java.util.HashMap<>();
+        claims.put("role", user.getRole().name());
+        claims.put("userId", user.getUserId().toString());
+        claims.put("name", user.getName());
+        String newAccessToken = jwtService.generateToken(claims, user.getEmail());
         String newRefreshTokenString = UUID.randomUUID().toString();
 
         RefreshToken newRefreshToken = RefreshToken.builder()

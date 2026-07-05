@@ -55,7 +55,7 @@ services:
       - zookeeper
 
   app:
-    build: .
+    build: ./server
     container_name: flashflow-app
     ports:
       - "8080:8080"

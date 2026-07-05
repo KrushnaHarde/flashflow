@@ -66,6 +66,13 @@ public class OrderController {
         return ResponseEntity.ok(orders);
     }
 
+    @GetMapping("/admin/reservations")
+    public ResponseEntity<List<Reservation>> getAllReservationsForAdmin() {
+        log.info("Admin request to get all reservations");
+        List<Reservation> reservations = reservationRepository.findAll();
+        return ResponseEntity.ok(reservations);
+    }
+
     @GetMapping("/purchase/{reservationId}/status")
     public ResponseEntity<PurchaseStatusResponse> getPurchaseStatus(
             @PathVariable UUID reservationId,

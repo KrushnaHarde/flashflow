@@ -35,4 +35,19 @@ public class InventoryController {
                 productId, updatedInventory.getTotalStock(), updatedInventory.getAvailableStock());
         return ResponseEntity.ok(updatedInventory);
     }
+
+    @org.springframework.web.bind.annotation.GetMapping("/products/{productId}/inventory")
+    @Operation(summary = "Get product inventory (Authenticated users)", description = "Retrieves stock details for a single product catalog item.")
+    public ResponseEntity<Inventory> getProductInventory(@PathVariable UUID productId) {
+        log.info("Received request to get inventory for product ID: {}", productId);
+        Inventory inventory = inventoryService.getInventoryByProductId(productId);
+        return ResponseEntity.ok(inventory);
+    }
+
+    @org.springframework.web.bind.annotation.GetMapping("/admin/inventory")
+    @Operation(summary = "Get all inventories (Admin only)", description = "Retrieves a list of all product inventories in the system.")
+    public ResponseEntity<java.util.List<Inventory>> getAllInventories() {
+        log.info("Received admin request to get all inventories");
+        return ResponseEntity.ok(inventoryService.getAllInventories());
+    }
 }

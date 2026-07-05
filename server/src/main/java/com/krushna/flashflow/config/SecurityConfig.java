@@ -29,6 +29,14 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+            .cors(cors -> cors.configurationSource(request -> {
+                org.springframework.web.cors.CorsConfiguration config = new org.springframework.web.cors.CorsConfiguration();
+                config.setAllowedOrigins(java.util.List.of("http://localhost:5173", "http://localhost:3000"));
+                config.setAllowedMethods(java.util.List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+                config.setAllowedHeaders(java.util.List.of("*"));
+                config.setAllowCredentials(true);
+                return config;
+            }))
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
                 // Public endpoints
@@ -38,8 +46,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.POST, "/admin/products").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/admin/products/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PATCH, "/admin/products/**").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.POST, "/admin/inventory/**").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.GET, "/admin/orders", "/admin/orders/**").hasRole("ADMIN")
+                .requestMatchers("/admin/inventory", "/admin/inventory/**").hasRole("ADMIN")
+                .requestMatchers("/admin/orders", "/admin/orders/**", "/admin/reservations", "/admin/reservations/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST, "/admin/sales").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT, "/admin/sales/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/admin/sales/**").hasRole("ADMIN")

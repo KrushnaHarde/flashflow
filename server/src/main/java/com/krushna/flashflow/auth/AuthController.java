@@ -66,4 +66,20 @@ public class AuthController {
         log.info("Successfully logged out user");
         return ResponseEntity.ok().build();
     }
+
+    @org.springframework.web.bind.annotation.GetMapping("/me")
+    @Operation(summary = "Get current user profile")
+    public ResponseEntity<UserResponse> getMe(@org.springframework.security.core.annotation.AuthenticationPrincipal User user) {
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        UserResponse responseDto = UserResponse.builder()
+                .id(user.getUserId())
+                .name(user.getName())
+                .email(user.getEmail())
+                .role(user.getRole())
+                .createdAt(user.getCreatedAt())
+                .build();
+        return ResponseEntity.ok(responseDto);
+    }
 }

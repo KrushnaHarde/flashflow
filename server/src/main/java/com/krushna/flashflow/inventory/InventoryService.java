@@ -78,4 +78,9 @@ public class InventoryService {
                     return new ResourceNotFoundException("Inventory not found for product id: " + productId);
                 });
     }
+
+    public java.util.List<Inventory> getAllInventories() {
+        log.info("Fetching all inventories from DB");
+        return inventoryRepository.findAll();
+    }
 }
