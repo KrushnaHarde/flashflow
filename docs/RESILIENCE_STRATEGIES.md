@@ -25,6 +25,8 @@ FlashFlow employs several strategies to ensure system stability under immense lo
 ## 6. Backpressure Handling
 * By offloading order processing and payment integrations to Kafka, the API servers are not blocked waiting for slow downstream systems. This allows the API to handle more concurrent requests and provide backpressure (e.g., scaling workers) asynchronously.
 
-## 7. Circuit Breaker for Payment
-* Integration with the external Payment Gateway is wrapped in a Circuit Breaker.
+## 7. Circuit Breaker for Payment (Production Recommendation)
+* In a production environment, integration with the external Payment Gateway is wrapped in a Circuit Breaker (e.g. via Resilience4j).
 * If the gateway experiences high latency or error rates, the circuit opens, immediately failing new payment requests to prevent thread starvation and cascading failures in our system.
+* *Note: The current POC leverages a deterministic mock validation (amounts > 50,000 fail; amounts <= 50,000 succeed) for test predictability, but does not deploy an active Resilience4j state.*
+
