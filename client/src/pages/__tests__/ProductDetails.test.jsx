@@ -36,9 +36,16 @@ describe('ProductDetails Component Tests', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    const mockSale = {
+      saleId: 'sale-1',
+      name: 'Test Sale',
+      startTime: new Date(Date.now() - 60000).toISOString(),
+      endTime: new Date(Date.now() + 60000).toISOString(),
+      productIds: ['22222222-2222-2222-2222-222222222222']
+    };
     productApi.getProductById.mockResolvedValue(mockProduct);
     productApi.getProductInventory.mockResolvedValue(mockInventory);
-    productApi.getFlashSales.mockResolvedValue([]);
+    productApi.getFlashSales.mockResolvedValue([mockSale]);
   });
 
   const renderComponent = () => {

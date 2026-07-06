@@ -211,8 +211,8 @@ export const ProductDetails = () => {
   }
 
   // Badges & States
-  let statusBadge = <Badge variant="success">AVAILABLE</Badge>;
-  let isBuyDisabled = product.status !== 'ACTIVE' || inventory?.availableStock <= 0;
+  let statusBadge = <Badge variant="default">NO SALE</Badge>;
+  let isBuyDisabled = product.status !== 'ACTIVE' || inventory?.availableStock <= 0 || !flashSaleInfo;
 
   if (product.status !== 'ACTIVE') {
     statusBadge = <Badge variant="default">INACTIVE</Badge>;
@@ -327,6 +327,8 @@ export const ProductDetails = () => {
             >
               {inventory?.availableStock <= 0
                 ? 'Out of Stock'
+                : !flashSaleInfo
+                ? 'No Active Sale'
                 : flashSaleInfo?.status === 'UPCOMING'
                 ? 'Sale Upcoming'
                 : flashSaleInfo?.status === 'ENDED'

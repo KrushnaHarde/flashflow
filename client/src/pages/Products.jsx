@@ -213,7 +213,8 @@ export const Products = () => {
               isBuyDisabled = true;
             }
           } else {
-            statusBadge = <Badge variant="success">AVAILABLE</Badge>;
+            statusBadge = <Badge variant="default">NO SALE</Badge>;
+            isBuyDisabled = true;
           }
 
           return (
@@ -292,9 +293,11 @@ export const Products = () => {
                 >
                   {inventory.availableStock <= 0
                     ? 'Out of Stock'
-                    : flashSaleInfo?.status === 'UPCOMING'
+                    : !flashSaleInfo
+                    ? 'No Active Sale'
+                    : flashSaleInfo.status === 'UPCOMING'
                     ? 'Sale Upcoming'
-                    : flashSaleInfo?.status === 'ENDED'
+                    : flashSaleInfo.status === 'ENDED'
                     ? 'Sale Ended'
                     : 'Buy Now'}
                 </Button>
