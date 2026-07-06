@@ -48,18 +48,18 @@ public class AuthController {
         
         org.springframework.http.ResponseCookie cookie = org.springframework.http.ResponseCookie.from("rt_flashflow", response.getRefreshToken())
                 .httpOnly(true)
-                .secure(true)
+                .secure(false)
                 .path("/api/v1/auth")
                 .maxAge(7 * 24 * 60 * 60)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .build();
 
         org.springframework.http.ResponseCookie csrfCookie = org.springframework.http.ResponseCookie.from("csrf_flashflow", response.getCsrfToken())
                 .httpOnly(false)
-                .secure(true)
+                .secure(false)
                 .path("/")
                 .maxAge(7 * 24 * 60 * 60)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .build();
         
         // Hide refresh token from client JSON body
@@ -89,18 +89,18 @@ public class AuthController {
         
         org.springframework.http.ResponseCookie cookie = org.springframework.http.ResponseCookie.from("rt_flashflow", response.getRefreshToken())
                 .httpOnly(true)
-                .secure(true)
+                .secure(false)
                 .path("/api/v1/auth")
                 .maxAge(7 * 24 * 60 * 60)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .build();
 
         org.springframework.http.ResponseCookie csrfCookie = org.springframework.http.ResponseCookie.from("csrf_flashflow", response.getCsrfToken())
                 .httpOnly(false)
-                .secure(true)
+                .secure(false)
                 .path("/")
                 .maxAge(7 * 24 * 60 * 60)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .build();
         
         // Hide refresh token from client JSON body
@@ -125,18 +125,18 @@ public class AuthController {
         
         org.springframework.http.ResponseCookie cookie = org.springframework.http.ResponseCookie.from("rt_flashflow", "")
                 .httpOnly(true)
-                .secure(true)
+                .secure(false)
                 .path("/api/v1/auth")
                 .maxAge(0)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .build();
 
         org.springframework.http.ResponseCookie csrfCookie = org.springframework.http.ResponseCookie.from("csrf_flashflow", "")
                 .httpOnly(false)
-                .secure(true)
+                .secure(false)
                 .path("/")
                 .maxAge(0)
-                .sameSite("Strict")
+                .sameSite("Lax")
                 .build();
         
         log.info("Successfully logged out user");
