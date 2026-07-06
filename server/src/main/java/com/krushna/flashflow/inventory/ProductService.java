@@ -43,7 +43,17 @@ public class ProductService {
             product.setStatus(ProductStatus.INACTIVE); // Default to INACTIVE as per requirement
         }
         Product savedProduct = productRepository.save(product);
-        log.info("Successfully created product with ID: {} and status: {}", savedProduct.getProductId(), savedProduct.getStatus());
+        
+        Inventory inventory = Inventory.builder()
+                .productId(savedProduct.getProductId())
+                .totalStock(0)
+                .availableStock(0)
+                .reservedStock(0)
+                .build();
+        inventoryRepository.save(inventory);
+        redisInventoryService.setStock(savedProduct.getProductId(), 0);
+
+        log.info("Successfully created product and inventory with ID: {} and status: {}", savedProduct.getProductId(), savedProduct.getStatus());
         return savedProduct;
     }
 

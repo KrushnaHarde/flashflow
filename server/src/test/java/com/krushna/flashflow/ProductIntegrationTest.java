@@ -61,6 +61,9 @@ public class ProductIntegrationTest {
     @MockitoBean
     private ReactiveRedisConnectionFactory reactiveRedisConnectionFactory;
 
+    @MockitoBean
+    private com.krushna.flashflow.inventory.redis.RedisInventoryService redisInventoryService;
+
     private String userToken;
     private String adminToken;
 
