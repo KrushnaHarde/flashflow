@@ -40,6 +40,9 @@ const getCookie = (name) => {
   return null;
 };
 
+// Cache the active refresh promise to prevent concurrent calls
+let activeRefreshPromise = null;
+
 export const AuthProvider = ({ children }) => {
   const [accessToken, setAccessToken] = useState(null);
   const [user, setUser] = useState(null);
@@ -52,22 +55,32 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
       return null;
     }
-    try {
-      const data = await authApi.refresh(storedCsrf);
-      const { accessToken: newAccessToken } = data;
-      
-      setAccessToken(newAccessToken);
-      const decoded = decodeToken(newAccessToken);
-      setUser(decoded);
-      return newAccessToken;
-    } catch (error) {
-      console.error('Failed to refresh token:', error);
-      // Clean up on failure
-      logout();
-      return null;
-    } finally {
-      setLoading(false);
+
+    if (activeRefreshPromise) {
+      return activeRefreshPromise;
     }
+
+    activeRefreshPromise = (async () => {
+      try {
+        const data = await authApi.refresh(storedCsrf);
+        const { accessToken: newAccessToken } = data;
+        
+        setAccessToken(newAccessToken);
+        const decoded = decodeToken(newAccessToken);
+        setUser(decoded);
+        return newAccessToken;
+      } catch (error) {
+        console.error('Failed to refresh token:', error);
+        // Clean up on failure
+        logout();
+        return null;
+      } finally {
+        setLoading(false);
+        activeRefreshPromise = null;
+      }
+    })();
+
+    return activeRefreshPromise;
   };
 
   useEffect(() => {
