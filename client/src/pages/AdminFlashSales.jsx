@@ -107,8 +107,13 @@ export const AdminFlashSales = () => {
         : Math.random().toString(36).substring(2) + Date.now().toString(36);
 
       // Backend expects LocalDateTime fields in ISO-8601 format: YYYY-MM-DDTHH:MM:SS
-      const formattedStart = new Date(data.startTime).toISOString().slice(0, 19);
-      const formattedEnd = data.endTime ? new Date(data.endTime).toISOString().slice(0, 19) : null;
+      // We pass the local datetime-local string (YYYY-MM-DDTHH:mm) with seconds appended to keep it local (IST)
+      const formattedStart = data.startTime.includes(':') && data.startTime.split(':').length === 2 
+        ? `${data.startTime}:00` 
+        : data.startTime;
+      const formattedEnd = data.endTime 
+        ? (data.endTime.includes(':') && data.endTime.split(':').length === 2 ? `${data.endTime}:00` : data.endTime) 
+        : null;
 
       const salePayload = {
         saleId,

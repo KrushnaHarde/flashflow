@@ -81,9 +81,7 @@ describe('AdminFlashSales Component Form Tests', () => {
     expect(payload.name).toBe('Winter Deal');
     expect(payload.productIds).toContain('p1');
 
-    const expectedStart = new Date('2026-12-01T10:00').toISOString().slice(0, 19);
-    const expectedEnd = new Date('2026-12-01T12:00').toISOString().slice(0, 19);
-    expect(payload.startTime).toBe(expectedStart);
-    expect(payload.endTime).toBe(expectedEnd);
+    expect(payload.startTime).toBe('2026-12-01T10:00:00');
+    expect(payload.endTime).toBe('2026-12-01T12:00:00');
   });
 });
