@@ -35,12 +35,3 @@ build/
 implementation_plan_by phase.md
 .env
 
-# Load testing temporary files and reports
-load-tests/k6_summary.json
-load-tests/system_metrics.json
-load-tests/reports/
-load-tests/history/
-results.json
-summary.csv
-summary.html
-summary.md
