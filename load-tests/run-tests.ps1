@@ -81,14 +81,15 @@ $collectorProcess | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
 
 # 7. Generate advanced performance reports and charts
 Write-Host "Generating performance engineering dashboard and raw exports..." -ForegroundColor Cyan
-node load-tests/report-generator.js
+node load-tests/report-generator.js $Scenario
 
 # 8. Open report automatically if requested
 if ($OpenReport) {
-    if (Test-Path $ReportPath) {
-        Write-Host "Launching generated HTML summary report..." -ForegroundColor Cyan
-        Start-Process $ReportPath
+    $ReportFile = Get-ChildItem -Path "summary_${Scenario}_*.html" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($ReportFile) {
+        Write-Host "Launching generated HTML summary report ($($ReportFile.Name))..." -ForegroundColor Cyan
+        Start-Process $ReportFile.FullName
     } else {
-        Write-Warning "HTML report ($ReportPath) was not found."
+        Write-Warning "HTML report matching 'summary_${Scenario}_*.html' was not found."
     }
 }

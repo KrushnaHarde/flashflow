@@ -49,6 +49,13 @@ while (-not (Test-Path $flagPath)) {
         if ($res.measurements) { $hikariActive = $res.measurements[0].value }
     } catch {}
 
+    # 5.5 Hikari DB Max Connections
+    $hikariMax = 50.0
+    try {
+        $res = Invoke-RestMethod -Uri "http://localhost:8080/actuator/metrics/hikaricp.connections.max" -TimeoutSec 1
+        if ($res.measurements) { $hikariMax = $res.measurements[0].value }
+    } catch {}
+
     # 6. Hikari DB Connections Pending (waiting threads)
     $hikariPending = 0.0
     try {
@@ -80,6 +87,7 @@ while (-not (Test-Path $flagPath)) {
         jvm_memory_used   = $jvmMemoryUsed
         jvm_threads_live  = $jvmThreads
         hikari_active     = $hikariActive
+        hikari_max        = $hikariMax
         hikari_pending    = $hikariPending
         kafka_lag_max     = $kafkaLag
         redis_latency_max = $redisLatency

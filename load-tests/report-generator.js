@@ -52,9 +52,12 @@ function collectEnvironment() {
   const kafkaVer = '3.8.1 (cp-kafka:7.4.0)';
   const springBootVer = '3.4.1';
 
+  const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
+  const isLocal = baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1');
+
   return {
     testMode: 'Capacity / Regression Testing',
-    execution: 'Local',
+    execution: isLocal ? 'Local (Same Host)' : 'Remote (Multi Host)',
     os: `${osName} (${osRelease})`,
     cpu: cpuModel,
     ram: totalRamGb,
@@ -101,6 +104,7 @@ function processMetrics(k6Summary, systemMetrics) {
 
   let cumulativeOffsetSec = 0;
   const processedStages = [];
+  const droppedIterationsCount = metrics.dropped_iterations ? (metrics.dropped_iterations.values.count || 0) : 0;
 
   stagesList.forEach((stageName) => {
     const duration = durations[stageName];
@@ -121,6 +125,7 @@ function processMetrics(k6Summary, systemMetrics) {
     const avgCpu = stageSysMetrics.length ? stageSysMetrics.reduce((sum, m) => sum + m.system_cpu, 0) / stageSysMetrics.length : 0;
     const maxCpu = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.system_cpu)) : 0;
     const avgHikariActive = stageSysMetrics.length ? stageSysMetrics.reduce((sum, m) => sum + m.hikari_active, 0) / stageSysMetrics.length : 0;
+    const maxHikariLimit = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.hikari_max || 50.0)) : 50.0;
     const maxHikariPending = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.hikari_pending)) : 0;
     const maxKafkaLag = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.kafka_lag_max)) : 0;
     const maxRedisLatency = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.redis_latency_max)) : 0;
@@ -148,39 +153,57 @@ function processMetrics(k6Summary, systemMetrics) {
     const p95Violated = p95Latency > slaP95Limit;
     const p99Violated = p99Latency > slaP99Limit;
     const errorViolated = errorRate > slaErrorLimit;
-    const slaStatus = (!p95Violated && !p99Violated && !errorViolated) ? 'PASS' : 'FAIL';
+    
+    let slaStatus = (!p95Violated && !p99Violated && !errorViolated) ? 'PASS' : 'FAIL';
 
     // Bottleneck identification logic
     let bottleneckCause = 'None';
     let bottleneckEvidence = 'N/A';
     let bottleneckRec = 'N/A';
 
-    if (slaStatus === 'FAIL' || p95Latency > 200) {
-      if (maxHikariPending > 0 || avgHikariActive >= 9.5) {
-        // Pool capacity limit is default 10 connections
+    // Data-integrity check: actual RPS collapses vs previous stage AND CPU is 0%
+    const prevStage = processedStages[processedStages.length - 1];
+    let scrapeFailed = false;
+    if (prevStage && actualRps < (prevStage.actualRps * 0.8) && maxCpu === 0 && avgCpu === 0 && targetRps >= 500) {
+      scrapeFailed = true;
+    }
+
+    if (scrapeFailed) {
+      slaStatus = 'INVALID';
+      bottleneckCause = 'Metrics Scraping Failed (Server Unresponsive / Connection Timeout)';
+      bottleneckEvidence = `Actual RPS dropped to ${actualRps.toFixed(1)} (previous stage: ${prevStage.actualRps.toFixed(1)}) while measured system CPU read 0.0% (metrics query timeout).`;
+      bottleneckRec = 'Spring Boot Tomcat threads or connection pool sat in BLOCKED state, failing to service Actuator metrics polls under high load. Increase resources or tune configurations.';
+    } else if (slaStatus === 'FAIL' || p95Latency > 200) {
+      // Check if k6 dropped iterations (client rig limitation)
+      if (targetRps >= 1000 && droppedIterationsCount > 0) {
+        slaStatus = 'INCONCLUSIVE';
+        bottleneckCause = 'Inconclusive (Client Load Generator Exhaustion)';
+        bottleneckEvidence = `k6 dropped ${droppedIterationsCount.toLocaleString()} load-testing iterations. The client machine ran out of sockets/CPU resources to generate the target load.`;
+        bottleneckRec = 'Move the k6 test runner execution to a separate machine on the network, or configure distributed load generation nodes.';
+      } else if (maxHikariPending > 0 || (maxHikariLimit > 0 && avgHikariActive >= (maxHikariLimit * 0.85))) {
         bottleneckCause = 'Database Connection Pool Saturation';
-        bottleneckEvidence = `Hikari active connections peaked at ${(avgHikariActive).toFixed(1)}/10. Active threads waiting for pool: ${maxHikariPending}.`;
-        bottleneckRec = 'Increase spring.datasource.hikari.maximum-pool-size in the application properties or optimize slow DB queries.';
+        bottleneckEvidence = `Hikari active connections reached ${(avgHikariActive).toFixed(1)}/${maxHikariLimit.toFixed(0)}. Active threads waiting: ${maxHikariPending}.`;
+        bottleneckRec = 'Increase spring.datasource.hikari.maximum-pool-size in application.properties or scale database resource instances.';
       } else if (maxKafkaLag > 50) {
         bottleneckCause = 'Kafka Consumer Lag Accumulation';
         bottleneckEvidence = `Kafka max partition consumer lag reached ${maxKafkaLag} records.`;
-        bottleneckRec = 'Increase Kafka consumer thread concurrency or split topics into more partitions.';
+        bottleneckRec = 'Increase Kafka listener container concurrency or partition the topic key distributions.';
       } else if (maxRedisLatency > 0.02) {
         bottleneckCause = 'Redis Command Completion Delay';
-        bottleneckEvidence = `Redis Lettuce commands max response latency hit ${(maxRedisLatency * 1000).toFixed(1)}ms.`;
-        bottleneckRec = 'Batch Redis operations using MGET/MSET pipeline operations, or replace complex multi-calls with a Lua script.';
+        bottleneckEvidence = `Redis lettuce max response latency hit ${(maxRedisLatency * 1000).toFixed(1)}ms.`;
+        bottleneckRec = 'Batch Redis operations using MGET/MSET pipelines or bundle commands in a single transactional Lua script.';
       } else if (maxCpu > 0.85) {
         bottleneckCause = 'CPU Core Exhaustion';
         bottleneckEvidence = `System CPU load reached ${(maxCpu * 100).toFixed(1)}%.`;
-        bottleneckRec = 'Scale CPU resources horizontally or profile garbage collection (GC) runs.';
+        bottleneckRec = 'Allocate more CPU cores to the hosting node or profile JVM GC throughput options.';
       } else if (errorRate > 0.5) {
         bottleneckCause = 'Tomcat Connector Backlog/OS Port Exhaustion';
         bottleneckEvidence = `Error rate reached ${(errorRate * 100).toFixed(1)}% due to connection refusals.`;
-        bottleneckRec = 'Increase server.tomcat.threads.max or apply OS registry fixes to increase TCP max ports.';
+        bottleneckRec = 'Increase server.tomcat.threads.max or apply OS registry overrides to increase TCP max ports.';
       } else {
         bottleneckCause = 'Database Lock Contention / Async Overhead';
-        bottleneckEvidence = `Thread saturation observed (live threads: ${avgCpu > 0.5 ? 'high' : 'normal'}).`;
-        bottleneckRec = 'Move heavy database persistence fully behind Kafka and make order processing fully event-driven.';
+        bottleneckEvidence = `Thread saturation observed (live JVM threads: high).`;
+        bottleneckRec = 'Optimize catalog table indexes and execute writes asynchronously behind the Kafka messaging bus.';
       }
     }
 
@@ -204,6 +227,7 @@ function processMetrics(k6Summary, systemMetrics) {
         cpuAvg: avgCpu,
         cpuMax: maxCpu,
         hikariActive: avgHikariActive,
+        hikariMax: maxHikariLimit,
         hikariPending: maxHikariPending,
         kafkaLag: maxKafkaLag,
         redisLatency: maxRedisLatency
@@ -717,6 +741,8 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
     }
     .status-pass { color: var(--accent-green); font-weight: bold; }
     .status-fail { color: var(--accent-red); font-weight: bold; }
+    .status-inconclusive { color: #ecc94b; font-weight: bold; }
+    .status-invalid { color: #a0aec0; font-weight: bold; }
     .score-circle {
       display: flex;
       flex-direction: column;
@@ -801,6 +827,12 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
       <div class="timestamp">Test Run Executed on: ${new Date().toLocaleString()}</div>
     </header>
 
+    ${env.execution.includes('Local') ? `
+      <div style="background: rgba(217, 119, 6, 0.15); border: 1px solid rgba(217, 119, 6, 0.3); border-radius: 12px; padding: 15px; margin-bottom: 20px; color: #ecc94b; font-size: 0.9rem;">
+        ⚠️ <strong>Local Testing Execution Mode:</strong> Both the k6 load generator and Spring Boot API server ran on the same host machine. High-load throughput tiers (5,000+ RPS) are limited by client CPU resource division and loopback port/backlog bounds.
+      </div>
+    ` : ''}
+
     <div class="grid-3">
       <!-- Performance Score Card -->
       <div class="card">
@@ -872,7 +904,7 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
               <td>${(s.errorRate * 100).toFixed(2)}%</td>
               <td>${(s.system.cpuMax * 100).toFixed(0)}%</td>
               <td>${s.system.hikariActive.toFixed(1)}</td>
-              <td><span class="${s.slaStatus === 'PASS' ? 'status-pass' : 'status-fail'}">${s.slaStatus}</span></td>
+              <td><span class="${s.slaStatus === 'PASS' ? 'status-pass' : (s.slaStatus === 'INCONCLUSIVE' ? 'status-inconclusive' : (s.slaStatus === 'INVALID' ? 'status-invalid' : 'status-fail'))}">${s.slaStatus}</span></td>
             </tr>
           `).join('')}
         </tbody>
@@ -971,7 +1003,22 @@ function main() {
   // 7. Write outputs
   console.log('[Reporter] Writing exports...');
 
+  const scenario = process.argv[2] || 'run';
+  
+  function getFormattedTimestamp() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return now.getFullYear() +
+           pad(now.getMonth() + 1) +
+           pad(now.getDate()) + '_' +
+           pad(now.getHours()) +
+           pad(now.getMinutes()) +
+           pad(now.getSeconds());
+  }
+  
   const timestamp = Date.now();
+  const timestampStr = getFormattedTimestamp();
+
   const runRecord = {
     timestamp,
     environment: env,
@@ -989,24 +1036,28 @@ function main() {
 
   // HTML Dashboard
   const htmlContent = generateHtmlReport(env, stages, score, kneePoint, recs, historyComp);
-  fs.writeFileSync(path.join(WORKSPACE_DIR, 'summary.html'), htmlContent, 'utf8');
+  fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.html`), htmlContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.html`), htmlContent, 'utf8');
 
   // JSON summary
-  fs.writeFileSync(path.join(WORKSPACE_DIR, 'results.json'), JSON.stringify(runRecord, null, 2), 'utf8');
+  fs.writeFileSync(path.join(WORKSPACE_DIR, `results_${scenario}_${timestampStr}.json`), JSON.stringify(runRecord, null, 2), 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.json`), JSON.stringify(runRecord, null, 2), 'utf8');
 
   // Markdown summary
   const mdContent = generateMarkdownReport(env, stages, score, kneePoint, recs);
-  fs.writeFileSync(path.join(WORKSPACE_DIR, 'summary.md'), mdContent, 'utf8');
+  fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.md`), mdContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.md`), mdContent, 'utf8');
 
   // CSV summary
   const csvContent = generateCsvReport(stages);
-  fs.writeFileSync(path.join(WORKSPACE_DIR, 'summary.csv'), csvContent, 'utf8');
+  fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.csv`), csvContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.csv`), csvContent, 'utf8');
 
-  console.log('[Reporter] Successfully generated HTML dashboard, results.json, summary.md, and summary.csv!');
+  console.log(`[Reporter] Successfully generated:`);
+  console.log(`  - summary_${scenario}_${timestampStr}.html`);
+  console.log(`  - results_${scenario}_${timestampStr}.json`);
+  console.log(`  - summary_${scenario}_${timestampStr}.md`);
+  console.log(`  - summary_${scenario}_${timestampStr}.csv`);
 }
 
 main();
