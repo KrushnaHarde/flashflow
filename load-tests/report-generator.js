@@ -29,7 +29,7 @@ function safeExec(cmd) {
 /**
  * 1. Collect Environment Summary
  */
-function collectEnvironment() {
+function collectEnvironment(isShortRun) {
   const osName = os.platform() === 'win32' ? 'Windows' : os.platform();
   const osRelease = os.release();
   const cpuModel = os.cpus().length > 0 ? os.cpus()[0].model : 'Unknown CPU';
@@ -55,9 +55,20 @@ function collectEnvironment() {
   const baseUrl = process.env.BASE_URL || 'http://localhost:8080';
   const isLocal = baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1');
 
+  let uniqueUsers = 1;
+  try {
+    const usersPoolPath = path.join(__dirname, 'users_pool.json');
+    if (fs.existsSync(usersPoolPath)) {
+      uniqueUsers = JSON.parse(fs.readFileSync(usersPoolPath, 'utf8')).length;
+    }
+  } catch (e) {
+    // Fallback
+  }
+
   return {
     testMode: 'Capacity / Regression Testing',
     execution: isLocal ? 'Local (Same Host)' : 'Remote (Multi Host)',
+    isShortRun: !!isShortRun,
     os: `${osName} (${osRelease})`,
     cpu: cpuModel,
     ram: totalRamGb,
@@ -66,7 +77,8 @@ function collectEnvironment() {
     redisVersion: redisVer,
     kafkaVersion: kafkaVer,
     postgresVersion: postgresVer,
-    k6Version: k6Ver
+    k6Version: k6Ver,
+    uniqueUsersUsed: uniqueUsers.toLocaleString()
   };
 }
 
@@ -121,22 +133,46 @@ function processMetrics(k6Summary, systemMetrics) {
       return t >= stageStartMs && t < stageEndMs;
     });
 
-    // Aggregate system metrics
-    const avgCpu = stageSysMetrics.length ? stageSysMetrics.reduce((sum, m) => sum + m.system_cpu, 0) / stageSysMetrics.length : 0;
-    const maxCpu = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.system_cpu)) : 0;
-    const avgHikariActive = stageSysMetrics.length ? stageSysMetrics.reduce((sum, m) => sum + m.hikari_active, 0) / stageSysMetrics.length : 0;
-    const maxHikariLimit = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.hikari_max || 50.0)) : 50.0;
-    const maxHikariPending = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.hikari_pending)) : 0;
-    const maxKafkaLag = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.kafka_lag_max)) : 0;
-    const maxRedisLatency = stageSysMetrics.length ? Math.max(...stageSysMetrics.map(m => m.redis_latency_max)) : 0;
+    // Helper helper to filter out nulls and compute metrics aggregates
+    const getMetricVal = (metricsList, field, aggregator) => {
+      const validVals = metricsList
+        .map(m => m[field])
+        .filter(v => v !== null && v !== undefined && !isNaN(v));
+      if (validVals.length === 0) return null;
+      return aggregator(validVals);
+    };
+
+    const getCounterDelta = (metricsList, field) => {
+      const validVals = metricsList
+        .map(m => m[field])
+        .filter(v => v !== null && v !== undefined && !isNaN(v));
+      if (validVals.length === 0) return 0;
+      const min = Math.min(...validVals);
+      const max = Math.max(...validVals);
+      return Math.max(0, max - min);
+    };
+
+    const avgCpu = getMetricVal(stageSysMetrics, 'system_cpu', vals => vals.reduce((sum, v) => sum + v, 0) / vals.length);
+    const maxCpu = getMetricVal(stageSysMetrics, 'system_cpu', vals => Math.max(...vals));
+    const avgHikariActive = getMetricVal(stageSysMetrics, 'hikari_active', vals => vals.reduce((sum, v) => sum + v, 0) / vals.length);
+    const maxHikariLimit = getMetricVal(stageSysMetrics, 'hikari_max', vals => Math.max(...vals)) || 50.0;
+    const maxHikariPending = getMetricVal(stageSysMetrics, 'hikari_pending', vals => Math.max(...vals));
+    const maxKafkaLag = getMetricVal(stageSysMetrics, 'kafka_lag_max', vals => Math.max(...vals));
+    const maxRedisLatency = getMetricVal(stageSysMetrics, 'redis_latency_max', vals => Math.max(...vals));
+
+    const expiredCount = getCounterDelta(stageSysMetrics, 'reservations_expired');
+    const confirmedCount = getCounterDelta(stageSysMetrics, 'orders_confirmed');
+    const workerConfirmRate = duration > 0 ? (confirmedCount / duration) : 0;
 
     // Extract k6 latency & throughput details
     const failedMetric = metrics[`http_req_failed{stage:${stageName}}`] || {};
     const durationMetric = metrics[`http_req_duration{stage:${stageName}}`] || {};
+    const rateLimitMetric = metrics[`rate_limit_blocks{stage:${stageName}}`] || {};
     
     const passes = failedMetric.values ? (failedMetric.values.passes || 0) : 0; // failed requests
     const fails = failedMetric.values ? (failedMetric.values.fails || 0) : 0;   // successful requests
     const totalRequests = passes + fails;
+    const rateLimitCount = rateLimitMetric.values ? (rateLimitMetric.values.count || 0) : 0;
     
     const actualRps = totalRequests / duration;
     const errorRate = totalRequests > 0 ? (passes / totalRequests) : 0;
@@ -161,38 +197,42 @@ function processMetrics(k6Summary, systemMetrics) {
     let bottleneckEvidence = 'N/A';
     let bottleneckRec = 'N/A';
 
-    // Data-integrity check: actual RPS collapses vs previous stage AND CPU is 0%
+    // Data-integrity check: actual RPS collapses vs previous stage AND CPU is null or 0
     const prevStage = processedStages[processedStages.length - 1];
     let scrapeFailed = false;
-    if (prevStage && actualRps < (prevStage.actualRps * 0.8) && maxCpu === 0 && avgCpu === 0 && targetRps >= 500) {
+    if (prevStage && actualRps < (prevStage.actualRps * 0.8) && (maxCpu === null || maxCpu === 0) && targetRps >= 500) {
       scrapeFailed = true;
     }
 
     if (scrapeFailed) {
       slaStatus = 'INVALID';
       bottleneckCause = 'Metrics Scraping Failed (Server Unresponsive / Connection Timeout)';
-      bottleneckEvidence = `Actual RPS dropped to ${actualRps.toFixed(1)} (previous stage: ${prevStage.actualRps.toFixed(1)}) while measured system CPU read 0.0% (metrics query timeout).`;
+      bottleneckEvidence = `Actual RPS dropped to ${actualRps.toFixed(1)} (previous stage: ${prevStage.actualRps.toFixed(1)}) while measured system CPU read N/A (metrics query timeout).`;
       bottleneckRec = 'Spring Boot Tomcat threads or connection pool sat in BLOCKED state, failing to service Actuator metrics polls under high load. Increase resources or tune configurations.';
     } else if (slaStatus === 'FAIL' || p95Latency > 200) {
+      const expectedRequests = targetRps * duration;
+      const droppedForStage = Math.max(0, expectedRequests - totalRequests);
+      const hasDroppedIterations = droppedIterationsCount > 0 && (droppedForStage > (expectedRequests * 0.05));
+
       // Check if k6 dropped iterations (client rig limitation)
-      if (targetRps >= 1000 && droppedIterationsCount > 0) {
+      if (targetRps >= 1000 && hasDroppedIterations) {
         slaStatus = 'INCONCLUSIVE';
         bottleneckCause = 'Inconclusive (Client Load Generator Exhaustion)';
-        bottleneckEvidence = `k6 dropped ${droppedIterationsCount.toLocaleString()} load-testing iterations. The client machine ran out of sockets/CPU resources to generate the target load.`;
+        bottleneckEvidence = `k6 dropped ${droppedForStage.toLocaleString()} load-testing iterations for this stage due to client machine socket/CPU exhaustion.`;
         bottleneckRec = 'Move the k6 test runner execution to a separate machine on the network, or configure distributed load generation nodes.';
-      } else if (maxHikariPending > 0 || (maxHikariLimit > 0 && avgHikariActive >= (maxHikariLimit * 0.85))) {
+      } else if (maxHikariPending !== null && maxHikariPending > 0 || (maxHikariLimit > 0 && avgHikariActive !== null && avgHikariActive >= (maxHikariLimit * 0.85))) {
         bottleneckCause = 'Database Connection Pool Saturation';
-        bottleneckEvidence = `Hikari active connections reached ${(avgHikariActive).toFixed(1)}/${maxHikariLimit.toFixed(0)}. Active threads waiting: ${maxHikariPending}.`;
+        bottleneckEvidence = `Hikari active connections reached ${(avgHikariActive || 0).toFixed(1)}/${maxHikariLimit.toFixed(0)}. Active threads waiting: ${maxHikariPending || 0}.`;
         bottleneckRec = 'Increase spring.datasource.hikari.maximum-pool-size in application.properties or scale database resource instances.';
-      } else if (maxKafkaLag > 50) {
-        bottleneckCause = 'Kafka Consumer Lag Accumulation';
-        bottleneckEvidence = `Kafka max partition consumer lag reached ${maxKafkaLag} records.`;
-        bottleneckRec = 'Increase Kafka listener container concurrency or partition the topic key distributions.';
-      } else if (maxRedisLatency > 0.02) {
+      } else if ((maxKafkaLag !== null && maxKafkaLag > 50) || expiredCount > 0) {
+        bottleneckCause = 'Worker/Kafka Consumer Throughput Bottleneck';
+        bottleneckEvidence = `Kafka consumer lag reached ${maxKafkaLag || 0} records and ${expiredCount} reservations expired before they could be confirmed.`;
+        bottleneckRec = 'Scale the async worker tier: increase Kafka partition count on flashflow.orders & flashflow.payments, scale worker consumer threads or run multiple worker instances. Keep HikariCP maximum-pool-size at 10 to avoid database scheduling thrashing.';
+      } else if (maxRedisLatency !== null && maxRedisLatency > 0.05 && slaStatus === 'FAIL') {
         bottleneckCause = 'Redis Command Completion Delay';
         bottleneckEvidence = `Redis lettuce max response latency hit ${(maxRedisLatency * 1000).toFixed(1)}ms.`;
         bottleneckRec = 'Batch Redis operations using MGET/MSET pipelines or bundle commands in a single transactional Lua script.';
-      } else if (maxCpu > 0.85) {
+      } else if (maxCpu !== null && maxCpu > 0.85) {
         bottleneckCause = 'CPU Core Exhaustion';
         bottleneckEvidence = `System CPU load reached ${(maxCpu * 100).toFixed(1)}%.`;
         bottleneckRec = 'Allocate more CPU cores to the hosting node or profile JVM GC throughput options.';
@@ -212,6 +252,10 @@ function processMetrics(k6Summary, systemMetrics) {
       targetRps,
       actualRps,
       requestCount: totalRequests,
+      rateLimitCount,
+      expiredCount,
+      confirmedCount,
+      workerConfirmRate,
       avgLatency,
       p95Latency,
       p99Latency,
@@ -311,8 +355,12 @@ function calculatePerformanceScore(stages) {
   const errorRateScore = Math.max(0, Math.round(100 - (avgErrorRate * 200))); // very sensitive to errors
 
   // 6. Resource Score
-  const maxCpu = Math.max(...activeStages.map(s => s.system.cpuMax));
-  const maxPendingDb = Math.max(...activeStages.map(s => s.system.hikariPending));
+  const validCpus = activeStages.map(s => s.system.cpuMax).filter(v => v !== null && v !== undefined);
+  const maxCpu = validCpus.length ? Math.max(...validCpus) : 0;
+
+  const validPendings = activeStages.map(s => s.system.hikariPending).filter(v => v !== null && v !== undefined);
+  const maxPendingDb = validPendings.length ? Math.max(...validPendings) : 0;
+
   const resource = Math.max(0, Math.round(100 - (maxCpu * 50) - (maxPendingDb * 10)));
 
   // Weighted Overall
@@ -348,41 +396,51 @@ function buildHistoryComparison(currentStages, currentScore) {
     return null; // No previous history
   }
 
-  // Load the most recent previous run
-  const previousRunPath = path.join(HISTORY_DIR, historyFiles[0]);
-  try {
-    const prevData = JSON.parse(fs.readFileSync(previousRunPath, 'utf8'));
-    const prevStages = prevData.stages || [];
-    const prevScore = prevData.score || {};
-
-    const comparisonStages = [];
-    currentStages.forEach(curr => {
-      const prev = prevStages.find(s => s.stageName === curr.stageName);
-      if (prev) {
-        comparisonStages.push({
-          stageName: curr.stageName,
-          targetRps: curr.targetRps,
-          currP95: curr.p95Latency,
-          prevP95: prev.p95Latency,
-          p95Delta: curr.p95Latency - prev.p95Latency,
-          currRps: curr.actualRps,
-          prevRps: prev.actualRps,
-          rpsDelta: curr.actualRps - prev.actualRps,
-          currError: curr.errorRate,
-          prevError: prev.errorRate,
-          errorDelta: curr.errorRate - prev.errorRate,
-        });
+  // Load the most recent valid, completed previous run
+  let prevData = null;
+  for (const file of historyFiles) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(HISTORY_DIR, file), 'utf8'));
+      const totalReq = (data.stages || []).reduce((sum, s) => sum + (s.requestCount || 0), 0);
+      if (totalReq > 0) {
+        prevData = data;
+        break; // Found our previous valid run
       }
-    });
+    } catch (e) {}
+  }
 
-    return {
-      prevTimestamp: prevData.timestamp,
-      scoreDelta: currentScore.overall - (prevScore.overall || 0),
-      stages: comparisonStages
-    };
-  } catch (e) {
+  if (!prevData) {
     return null;
   }
+
+  const prevStages = prevData.stages || [];
+  const prevScore = prevData.score || {};
+
+  const comparisonStages = [];
+  currentStages.forEach(curr => {
+    const prev = prevStages.find(s => s.stageName === curr.stageName);
+    if (prev) {
+      comparisonStages.push({
+        stageName: curr.stageName,
+        targetRps: curr.targetRps,
+        currP95: curr.p95Latency,
+        prevP95: prev.p95Latency,
+        p95Delta: curr.p95Latency - prev.p95Latency,
+        currRps: curr.actualRps,
+        prevRps: prev.actualRps,
+        rpsDelta: curr.actualRps - prev.actualRps,
+        currError: curr.errorRate,
+        prevError: prev.errorRate,
+        errorDelta: curr.errorRate - prev.errorRate,
+      });
+    }
+  });
+
+  return {
+    prevTimestamp: prevData.timestamp,
+    scoreDelta: currentScore.overall - (prevScore.overall || 0),
+    stages: comparisonStages
+  };
 }
 
 /**
@@ -538,6 +596,10 @@ function drawSvgChart(title, labels, values, type = 'line', threshold = null) {
  * 8. Exports Generator: Markdown
  */
 function generateMarkdownReport(env, stages, score, kneePoint, recs) {
+  const totalRateLimitBlocks = stages.reduce((sum, s) => sum + s.rateLimitCount, 0);
+  const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
+  const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
+
   let md = `# Executive Performance Report: FlashFlow Stress Capacity\n\n`;
   md += `## Executive Summary\n\n`;
   md += `- **Maximum Sustained Throughput**: ${Math.round(stages.filter(s => s.slaStatus === 'PASS').reduce((max, s) => Math.max(max, s.actualRps), 0))} RPS\n`;
@@ -547,21 +609,30 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs) {
   md += `- **First SLA Breach**: ${firstBreach ? `${firstBreach.stageName} (Target ${firstBreach.targetRps} RPS)` : 'None'}\n`;
   md += `- **Breaking Point / Knee Point**: ${kneePoint.stageName} (Target ${kneePoint.targetRps} RPS)\n`;
   md += `- **Primary Bottleneck**: ${kneePoint.bottleneck.cause}\n`;
+  md += `- **Rate-Limited (429) Requests**: ${totalRateLimitBlocks.toLocaleString()} (${rateLimitPercent}% of total requests)\n`;
   md += `- **Overall Correctness**: ${score.correctness} / 100\n`;
   md += `- **Overall Score**: ${score.overall} / 100\n\n`;
   
-  md += `## Environment Summary\n\n`;
+  md += `## Environment & Test Configuration\n\n`;
   md += `| Parameter | Value |\n| :--- | :--- |\n`;
+  md += `| **Execution Mode** | ${env.isShortRun ? 'ShortRun (Debug) (5s ramp / 10s hold)' : 'Full Scale Run (30-60s ramp / 1-3m hold)'} |\n`;
   Object.keys(env).forEach(k => {
-    md += `| ${k} | ${env[k]} |\n`;
+    if (k !== 'isShortRun') {
+      md += `| **${k}** | ${env[k]} |\n`;
+    }
   });
   md += `\n`;
 
   md += `## Staged Metrics & Performance Matrix\n\n`;
-  md += `| Stage | Target RPS | Actual RPS | Req Count | p95 Latency | p99 Latency | Error Rate | CPU Max | Hikari Active | SLA Status |\n`;
-  md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
+  md += `| Stage | Target RPS | Actual RPS | Req Count | p95 Latency | p99 Latency | Error Rate | CPU Max | Hikari Active | Max Kafka Lag | Expired Reservations | Worker Confirm Rate | SLA Status |\n`;
+  md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
   stages.forEach(s => {
-    md += `| **${s.stageName}** | ${s.targetRps} | ${s.actualRps.toFixed(1)} | ${s.requestCount} | ${s.p95Latency.toFixed(1)} ms | ${s.p99Latency.toFixed(1)} ms | ${(s.errorRate * 100).toFixed(2)}% | ${(s.system.cpuMax * 100).toFixed(0)}% | ${s.system.hikariActive.toFixed(1)} | ${s.slaStatus} |\n`;
+    const cpuStr = s.system.cpuMax !== null ? `${(s.system.cpuMax * 100).toFixed(0)}%` : 'SCRAPE_FAILED';
+    const hikariStr = s.system.hikariActive !== null ? s.system.hikariActive.toFixed(1) : 'SCRAPE_FAILED';
+    const kafkaLagStr = s.system.kafkaLag !== null ? s.system.kafkaLag.toString() : 'SCRAPE_FAILED';
+    const expiredStr = s.expiredCount.toString();
+    const workerRateStr = s.workerConfirmRate.toFixed(1);
+    md += `| **${s.stageName}** | ${s.targetRps} | ${s.actualRps.toFixed(1)} | ${s.requestCount} | ${s.p95Latency.toFixed(1)} ms | ${s.p99Latency.toFixed(1)} ms | ${(s.errorRate * 100).toFixed(2)}% | ${cpuStr} | ${hikariStr} | ${kafkaLagStr} | ${expiredStr} | ${workerRateStr} / s | ${s.slaStatus} |\n`;
   });
   md += `\n`;
 
@@ -585,9 +656,12 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs) {
  * 9. Exports Generator: CSV
  */
 function generateCsvReport(stages) {
-  let csv = `StageName,TargetRps,ActualRps,ReqCount,AvgLatencyMs,p95LatencyMs,p99LatencyMs,ErrorRatePercent,CpuMaxPercent,HikariActiveAvg,SlaStatus\n`;
+  let csv = `StageName,TargetRps,ActualRps,ReqCount,AvgLatencyMs,p95LatencyMs,p99LatencyMs,ErrorRatePercent,CpuMaxPercent,HikariActiveAvg,KafkaLagMax,ReservationsExpired,WorkerConfirmRate,SlaStatus\n`;
   stages.forEach(s => {
-    csv += `${s.stageName},${s.targetRps},${s.actualRps.toFixed(2)},${s.requestCount},${s.avgLatency.toFixed(2)},${s.p95Latency.toFixed(2)},${s.p99Latency.toFixed(2)},${(s.errorRate * 100).toFixed(4)},${(s.system.cpuMax * 100).toFixed(2)},${s.system.hikariActive.toFixed(2)},${s.slaStatus}\n`;
+    const cpuVal = s.system.cpuMax !== null ? (s.system.cpuMax * 100).toFixed(2) : 'SCRAPE_FAILED';
+    const hikariVal = s.system.hikariActive !== null ? s.system.hikariActive.toFixed(2) : 'SCRAPE_FAILED';
+    const kafkaLagVal = s.system.kafkaLag !== null ? s.system.kafkaLag : -1;
+    csv += `${s.stageName},${s.targetRps},${s.actualRps.toFixed(2)},${s.requestCount},${s.avgLatency.toFixed(2)},${s.p95Latency.toFixed(2)},${s.p99Latency.toFixed(2)},${(s.errorRate * 100).toFixed(4)},${cpuVal},${hikariVal},${kafkaLagVal},${s.expiredCount},${s.workerConfirmRate.toFixed(2)},${s.slaStatus}\n`;
   });
   return csv;
 }
@@ -596,6 +670,10 @@ function generateCsvReport(stages) {
  * 10. Exports Generator: HTML dashboard
  */
 function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
+  const totalRateLimitBlocks = stages.reduce((sum, s) => sum + s.rateLimitCount, 0);
+  const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
+  const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
+
   const stageLabels = stages.map(s => s.stageName.replace('_rps', ''));
   const latencyValues = stages.map(s => s.p95Latency);
   const rpsValues = stages.map(s => s.actualRps);
@@ -852,11 +930,15 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
         <div class="exec-item"><span class="exec-label">Max Sustained Users</span><span class="exec-val">${peakUsers} VUs</span></div>
         <div class="exec-item"><span class="exec-label">First SLA Breach</span><span class="exec-val ${firstBreach ? 'status-fail' : 'status-pass'}">${firstBreach ? firstBreach.stageName : 'None'}</span></div>
         <div class="exec-item"><span class="exec-label">Knee/Breaking Point</span><span class="exec-val" style="color: #ecc94b">${kneePoint.stageName}</span></div>
+        <div class="exec-item"><span class="exec-label">Rate-Limit 429 Blocks</span><span class="exec-val">${totalRateLimitBlocks.toLocaleString()} (${rateLimitPercent}%)</span></div>
       </div>
 
       <!-- Environment Card -->
       <div class="card">
-        <h2>💻 Environment Summary</h2>
+        <h2>💻 Environment Summary & Run Configuration</h2>
+        <div class="exec-item"><span class="exec-label">Execution Mode</span><span class="exec-val" style="color: ${env.isShortRun ? '#ecc94b' : 'var(--accent-green)'}">${env.isShortRun ? 'ShortRun (Debug Mode)' : 'Full Scale Capacity Run'}</span></div>
+        <div class="exec-item"><span class="exec-label">Stage Durations</span><span class="exec-val">${env.isShortRun ? '5s Ramp / 10s Hold' : 'Dynamic (30-60s Ramp / 1-3m Hold)'}</span></div>
+        <div class="exec-item"><span class="exec-label">Unique Test Users</span><span class="exec-val">${env.uniqueUsersUsed || 'N/A'}</span></div>
         <div class="exec-item"><span class="exec-label">Operating System</span><span class="exec-val">${env.os}</span></div>
         <div class="exec-item"><span class="exec-label">Java Version</span><span class="exec-val">${env.javaVersion}</span></div>
         <div class="exec-item"><span class="exec-label">Spring Boot</span><span class="exec-val">${env.springBootVersion}</span></div>
@@ -889,6 +971,9 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
             <th>Error Rate</th>
             <th>CPU Usage (Max)</th>
             <th>Hikari Active</th>
+            <th>Kafka Consumer Lag (max)</th>
+            <th>Reservations Expired</th>
+            <th>Worker Confirm Rate</th>
             <th>SLA Status</th>
           </tr>
         </thead>
@@ -902,8 +987,11 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
               <td>${s.p95Latency.toFixed(1)} ms</td>
               <td>${s.p99Latency.toFixed(1)} ms</td>
               <td>${(s.errorRate * 100).toFixed(2)}%</td>
-              <td>${(s.system.cpuMax * 100).toFixed(0)}%</td>
-              <td>${s.system.hikariActive.toFixed(1)}</td>
+              <td>${s.system.cpuMax !== null ? `${(s.system.cpuMax * 100).toFixed(0)}%` : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
+              <td>${s.system.hikariActive !== null ? s.system.hikariActive.toFixed(1) : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
+              <td>${s.system.kafkaLag !== null ? s.system.kafkaLag : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
+              <td>${s.expiredCount}</td>
+              <td>${s.workerConfirmRate.toFixed(1)} / s</td>
               <td><span class="${s.slaStatus === 'PASS' ? 'status-pass' : (s.slaStatus === 'INCONCLUSIVE' ? 'status-inconclusive' : (s.slaStatus === 'INVALID' ? 'status-invalid' : 'status-fail'))}">${s.slaStatus}</span></td>
             </tr>
           `).join('')}
@@ -974,6 +1062,7 @@ function main() {
   }
 
   const k6Summary = readJsonFile(K6_SUMMARY_FILE);
+  const isShortRun = (k6Summary.state && k6Summary.state.testRunDurationMs < 300000); // under 5 min
   
   let systemMetrics = [];
   if (fs.existsSync(SYSTEM_METRICS_FILE)) {
@@ -983,7 +1072,7 @@ function main() {
   }
 
   // 1. Gather host and tool details
-  const env = collectEnvironment();
+  const env = collectEnvironment(isShortRun);
 
   // 2. Correlate metrics and categorize stages
   const stages = processMetrics(k6Summary, systemMetrics);

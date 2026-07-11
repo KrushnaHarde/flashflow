@@ -18,6 +18,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Counter;
+import jakarta.annotation.PostConstruct;
 
 @Service
 @Slf4j
@@ -32,6 +35,13 @@ public class ReservationExpiryService {
     private final RedisReservationService redisReservationService;
     
     private final ObjectMapper objectMapper;
+    private final MeterRegistry meterRegistry;
+    private Counter expiredCounter;
+
+    @PostConstruct
+    public void init() {
+        this.expiredCounter = meterRegistry.counter("reservations.expired.count");
+    }
 
     @Transactional
     public void expireReservations() {
@@ -46,6 +56,7 @@ public class ReservationExpiryService {
         log.info("Found {} expired active reservations to process", expiredReservations.size());
 
         for (Reservation reservation : expiredReservations) {
+            expiredCounter.increment();
             UUID reservationId = reservation.getReservationId();
             UUID productId = reservation.getProductId();
             int quantity = reservation.getQuantity();

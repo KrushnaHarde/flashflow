@@ -16,4 +16,5 @@ public class PurchaseResponseDto {
     private UUID reservationId;
     private String status;
     private BigDecimal totalAmount;
+    private java.time.LocalDateTime expiresAt;
 }

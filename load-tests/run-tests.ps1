@@ -56,6 +56,20 @@ Write-Host "JSON Log Output    : $JsonPath" -ForegroundColor Green
 Write-Host "HTML Report Output : $ReportPath" -ForegroundColor Green
 Write-Host ""
 
+# 4. Generate user pool for the test run
+$BackendUrl = $BaseUrl
+if ($BaseUrl -match "3000") {
+    $BackendUrl = "http://localhost:8080"
+}
+Write-Host "Pre-registering 20000 test users at $BackendUrl..." -ForegroundColor Gray
+try {
+    Invoke-RestMethod -Method Post -Uri "$BackendUrl/api/v1/auth/bulk-register?count=20000" -OutFile "load-tests/users_pool.json" -TimeoutSec 30
+    Write-Host "Successfully pre-registered users and generated load-tests/users_pool.json." -ForegroundColor Green
+} catch {
+    Write-Warning "Failed to pre-register users: $_"
+    "[]" | Out-File -FilePath "load-tests/users_pool.json" -Encoding utf8
+}
+
 # 4. Launch background metrics collector
 $metricsPath = "load-tests/system_metrics.json"
 if (Test-Path $metricsPath) { Remove-Item $metricsPath -Force }
@@ -74,12 +88,24 @@ $k6Args += $ScriptFile
 Write-Host "Command: k6 $($k6Args -join ' ')" -ForegroundColor Gray
 & k6 $k6Args
 
-# 6. Stop metrics collector and wait for file persistence
+# 7. Stop metrics collector and wait for file persistence
 Write-Host "Stopping background metrics collector..." -ForegroundColor Gray
 New-Item -ItemType File -Path "load-tests/stop_collector.tmp" -Force | Out-Null
-$collectorProcess | Wait-Process -Timeout 10 -ErrorAction SilentlyContinue
+$collectorProcess | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
 
-# 7. Generate advanced performance reports and charts
+# Wait for system_metrics.json to be fully written and closed
+for ($i = 0; $i -lt 10; $i++) {
+    if (Test-Path $metricsPath) {
+        $fileInfo = Get-Item $metricsPath
+        if ($fileInfo.Length -gt 10) {
+            Start-Sleep -Milliseconds 500
+            break
+        }
+    }
+    Start-Sleep -Seconds 1
+}
+
+# 8. Generate advanced performance reports and charts
 Write-Host "Generating performance engineering dashboard and raw exports..." -ForegroundColor Cyan
 node load-tests/report-generator.js $Scenario
 

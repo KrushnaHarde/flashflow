@@ -40,6 +40,14 @@ public class AuthController {
         return ResponseEntity.status(HttpStatus.CREATED).body(responseDto);
     }
 
+    @PostMapping("/bulk-register")
+    @Operation(summary = "Bulk register users for load tests", description = "Registers multiple unique users and returns their tokens and IDs.")
+    public ResponseEntity<java.util.List<java.util.Map<String, Object>>> bulkRegister(@org.springframework.web.bind.annotation.RequestParam(defaultValue = "500") int count) {
+        log.info("Bulk registering {} users for load tests", count);
+        java.util.List<java.util.Map<String, Object>> response = authenticationService.bulkRegister(count);
+        return ResponseEntity.ok(response);
+    }
+
     @PostMapping("/login")
     @Operation(summary = "Authenticate user", description = "Validates credentials and returns JWT access token and refresh token details.")
     public ResponseEntity<AuthResponse> login(@RequestBody LoginRequest request) {

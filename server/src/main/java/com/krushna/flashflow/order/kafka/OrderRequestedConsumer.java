@@ -7,6 +7,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Counter;
+import jakarta.annotation.PostConstruct;
 
 @Service
 @Slf4j
@@ -15,6 +18,13 @@ public class OrderRequestedConsumer {
 
     private final OrderFulfillmentService orderFulfillmentService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final MeterRegistry meterRegistry;
+    private Counter confirmedCounter;
+
+    @PostConstruct
+    public void init() {
+        this.confirmedCounter = meterRegistry.counter("orders.confirmed.count");
+    }
 
     @KafkaListener(topics = "flashflow.orders", groupId = "flashflow-group")
     public void consume(String message) throws Exception {
@@ -27,6 +37,7 @@ public class OrderRequestedConsumer {
             attempts++;
             try {
                 orderFulfillmentService.fulfillOrder(event);
+                confirmedCounter.increment();
                 break;
             } catch (org.springframework.dao.OptimisticLockingFailureException e) {
                 if (attempts >= 10) {

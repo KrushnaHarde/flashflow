@@ -9,4 +9,8 @@ import java.util.UUID;
 @Repository
 public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByEmail(String email);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("DELETE FROM User u WHERE u.email LIKE 'bulk_%'")
+    void deleteBulkUsers();
 }

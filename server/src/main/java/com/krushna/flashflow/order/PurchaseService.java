@@ -174,6 +174,8 @@ public class PurchaseService {
             throw new RuntimeException("Failed to serialize OrderRequestedEvent for outbox", e);
         }
 
+        final LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(5);
+
         try {
             // 7. DB Transaction: Create Reservation + Idempotency save + OutboxEvent save (no DB Inventory update)
             transactionTemplate.execute(status -> {
@@ -194,7 +196,7 @@ public class PurchaseService {
                         .unitPrice(product.getPrice())
                         .totalAmount(totalAmount)
                         .status(ReservationStatus.ACTIVE)
-                        .expiresAt(LocalDateTime.now().plusMinutes(5))
+                        .expiresAt(expiresAt)
                         .build();
 
                 reservationRepository.save(reservation);
@@ -233,6 +235,7 @@ public class PurchaseService {
                 .reservationId(reservationId)
                 .status(ReservationStatus.ACTIVE.name())
                 .totalAmount(totalAmount)
+                .expiresAt(expiresAt)
                 .build();
     }
 }

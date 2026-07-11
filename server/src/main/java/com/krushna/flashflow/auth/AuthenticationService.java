@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Service
 @RequiredArgsConstructor
@@ -26,6 +27,7 @@ public class AuthenticationService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
+    private final JdbcTemplate jdbcTemplate;
 
     @Transactional
     public User register(RegisterRequest request) {
@@ -169,5 +171,67 @@ public class AuthenticationService {
                         log.info("Deleted refresh token from database during logout");
                     });
         }
+    }
+
+    @Transactional
+    public java.util.List<java.util.Map<String, Object>> bulkRegister(int count) {
+        log.info("Performing clean up of existing bulk users...");
+        userRepository.deleteBulkUsers();
+
+        log.info("Bulk registering {} users...", count);
+        final java.util.List<java.util.Map<String, Object>> userPool = new java.util.ArrayList<>();
+        final String encodedPassword = passwordEncoder.encode("Password123!");
+        final String productId = "5169a9b2-3b2d-4bf8-a46c-7e61e06cd2df";
+        
+        final java.util.List<UUID> userIds = new java.util.ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            userIds.add(UUID.randomUUID());
+        }
+
+        // Batch insert using jdbcTemplate
+        final String sql = "INSERT INTO users (user_id, name, email, password, role, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, current_timestamp, current_timestamp)";
+        jdbcTemplate.batchUpdate(sql, new org.springframework.jdbc.core.BatchPreparedStatementSetter() {
+            @Override
+            public void setValues(java.sql.PreparedStatement ps, int i) throws java.sql.SQLException {
+                UUID userId = userIds.get(i);
+                ps.setObject(1, userId);
+                ps.setString(2, "Bulk User " + i);
+                ps.setString(3, "bulk_" + userId + "@example.com");
+                ps.setString(4, encodedPassword);
+                ps.setString(5, Role.USER.name());
+                ps.setBoolean(6, true);
+            }
+
+            @Override
+            public int getBatchSize() {
+                return count;
+            }
+        });
+
+        // Generate tokens
+        for (int i = 0; i < count; i++) {
+            UUID userId = userIds.get(i);
+            String email = "bulk_" + userId + "@example.com";
+            
+            // Build pseudo User object for claims building
+            User user = User.builder()
+                    .userId(userId)
+                    .email(email)
+                    .role(Role.USER)
+                    .name("Bulk User " + i)
+                    .build();
+                    
+            java.util.Map<String, Object> claims = buildClaims(user);
+            String accessToken = jwtService.generateToken(claims, user.getEmail());
+            
+            java.util.Map<String, Object> uData = new java.util.HashMap<>();
+            uData.put("token", accessToken);
+            uData.put("userId", userId.toString());
+            uData.put("productId", productId);
+            userPool.add(uData);
+        }
+        
+        log.info("Bulk registered {} users successfully.", count);
+        return userPool;
     }
 }
