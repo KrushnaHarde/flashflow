@@ -221,9 +221,9 @@ function processMetrics(k6Summary, systemMetrics) {
         bottleneckEvidence = `k6 dropped ${droppedForStage.toLocaleString()} load-testing iterations for this stage due to client machine socket/CPU exhaustion.`;
         bottleneckRec = 'Move the k6 test runner execution to a separate machine on the network, or configure distributed load generation nodes.';
       } else if (maxHikariPending !== null && maxHikariPending > 0 || (maxHikariLimit > 0 && avgHikariActive !== null && avgHikariActive >= (maxHikariLimit * 0.85))) {
-        bottleneckCause = 'Database Connection Pool Saturation';
+        bottleneckCause = 'REGRESSION VIOLATION: Database Connection Pool Saturation';
         bottleneckEvidence = `Hikari active connections reached ${(avgHikariActive || 0).toFixed(1)}/${maxHikariLimit.toFixed(0)}. Active threads waiting: ${maxHikariPending || 0}.`;
-        bottleneckRec = 'Increase spring.datasource.hikari.maximum-pool-size in application.properties or scale database resource instances.';
+        bottleneckRec = 'PostgreSQL database pool saturation detected! Since the HTTP hot path is now decoupled from Postgres, this indicates a serious regression (e.g. database operations or blocking calls are accidentally being executed on the synchronous HTTP request path). Audit controllers and services for accidental DB queries.';
       } else if ((maxKafkaLag !== null && maxKafkaLag > 50) || expiredCount > 0) {
         bottleneckCause = 'Worker/Kafka Consumer Throughput Bottleneck';
         bottleneckEvidence = `Kafka consumer lag reached ${maxKafkaLag || 0} records and ${expiredCount} reservations expired before they could be confirmed.`;
