@@ -14,8 +14,15 @@ public class ReservationExpiryScheduler {
 
     private final ReservationExpiryService reservationExpiryService;
 
+    @org.springframework.beans.factory.annotation.Value("${flashflow.schedulers.enabled:true}")
+    private boolean schedulersEnabled;
+
     @Scheduled(fixedDelay = 30000)
     public void scheduleReservationExpiry() {
+        if (!schedulersEnabled) {
+            log.debug("ReservationExpiryScheduler is disabled by config.");
+            return;
+        }
         log.info("Running reservation expiry checker task...");
         int attempts = 0;
         while (true) {
