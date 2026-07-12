@@ -18,5 +18,7 @@ public class OrderRequestedEvent {
     private UUID productId;
     private Integer quantity;
     private BigDecimal totalAmount;
+    private BigDecimal unitPrice;
+    private java.time.LocalDateTime expiresAt;
     private String idempotencyKey;
 }
