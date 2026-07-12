@@ -17,7 +17,8 @@ import jakarta.annotation.PostConstruct;
 public class OrderRequestedConsumer {
 
     private final OrderFulfillmentService orderFulfillmentService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
     private final MeterRegistry meterRegistry;
     private Counter confirmedCounter;
 
@@ -26,7 +27,7 @@ public class OrderRequestedConsumer {
         this.confirmedCounter = meterRegistry.counter("orders.confirmed.count");
     }
 
-    @KafkaListener(topics = "flashflow.orders", groupId = "flashflow-group")
+    @KafkaListener(topics = "flashflow.orders", groupId = "flashflow-group", concurrency = "8")
     public void consume(String message) throws Exception {
         log.info("Received Kafka message from flashflow.orders topic");
         OrderRequestedEvent event = objectMapper.readValue(message, OrderRequestedEvent.class);
