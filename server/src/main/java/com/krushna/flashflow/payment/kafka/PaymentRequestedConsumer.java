@@ -14,9 +14,10 @@ import org.springframework.stereotype.Service;
 public class PaymentRequestedConsumer {
 
     private final PaymentFulfillmentService paymentFulfillmentService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
 
-    @KafkaListener(topics = "flashflow.payments", groupId = "flashflow-group")
+    @KafkaListener(topics = "flashflow.payments", groupId = "flashflow-group", concurrency = "8")
     public void consume(String message) throws Exception {
         log.info("Received Kafka message from flashflow.payments topic");
         Order order = objectMapper.readValue(message, Order.class);
