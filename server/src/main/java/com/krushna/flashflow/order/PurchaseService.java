@@ -25,6 +25,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -48,6 +50,8 @@ public class PurchaseService {
     private final OutboxEventRepository outboxEventRepository;
     private final TransactionTemplate transactionTemplate;
     private final FlashSaleService flashSaleService;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
@@ -67,8 +71,7 @@ public class PurchaseService {
         log.info("Processing purchase request. User: {}, Product: {}, Quantity: {}, IdempotencyKey: {}", 
                 userId, productId, quantity, idempotencyKey);
 
-        // 1. Idempotency Check (Redis & DB) - CHECK THIS BEFORE RATE LIMITING
-        // First check Redis
+        // 1. Idempotency Check (Redis only for the hot-path)
         RedisIdempotencyService.IdempotencyValue cached = redisIdempotencyService.getIdempotency(userId, idempotencyKey);
         if (cached != null) {
             log.info("Idempotency match found in Redis for user: {}, key: {}", userId, idempotencyKey);
@@ -83,22 +86,6 @@ public class PurchaseService {
             }
         }
 
-        // Check DB as fallback
-        Optional<Idempotency> dbIdempotency = idempotencyRepository.findById(new IdempotencyId(idempotencyKey, userId));
-        if (dbIdempotency.isPresent()) {
-            Idempotency imp = dbIdempotency.get();
-            log.info("Idempotency match found in DB for user: {}, key: {}", userId, idempotencyKey);
-            if (imp.getStatus() == IdempotencyStatus.PROCESSING || imp.getStatus() == IdempotencyStatus.ORDER_CREATED) {
-                throw new IllegalStateException("Request is currently being processed.");
-            } else if (imp.getStatus() == IdempotencyStatus.COMPLETED) {
-                try {
-                    return objectMapper.readValue(imp.getResponseSnapshot(), PurchaseResponseDto.class);
-                } catch (Exception e) {
-                    log.error("Failed to deserialize DB idempotency response", e);
-                }
-            }
-        }
-
         // 2. Rate Limiting Check (Redis)
         boolean allowed = rateLimiterService.rateLimit(userId, rateLimitLimit, rateLimitWindow);
         if (!allowed) {
@@ -106,25 +93,54 @@ public class PurchaseService {
             throw new IllegalStateException("Rate limit exceeded. Please try again later.");
         }
 
-        // 3. Validate User
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
-        if (!user.isEnabled()) {
+        // 3. Validate User - Cache enabled state in Redis
+        String userEnabledKey = "user:" + userId + ":enabled";
+        String cachedEnabled = stringRedisTemplate.opsForValue().get(userEnabledKey);
+        boolean enabled;
+        if (cachedEnabled != null) {
+            enabled = Boolean.parseBoolean(cachedEnabled);
+        } else {
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
+            enabled = user.isEnabled();
+            stringRedisTemplate.opsForValue().set(userEnabledKey, String.valueOf(enabled), 10, java.util.concurrent.TimeUnit.MINUTES);
+        }
+        if (!enabled) {
             log.warn("User {} is disabled", userId);
             throw new IllegalArgumentException("User is disabled");
         }
 
-        // 4. Validate Product & Quantity
+        // 4. Validate Product & Quantity - Cache price/status metadata in Redis
         if (quantity == null || quantity <= 0) {
             throw new IllegalArgumentException("Quantity must be greater than zero");
         }
-        Product product = productService.getProductById(productId);
-        if (product.getStatus() != ProductStatus.ACTIVE) {
-            log.warn("Product {} is not active. Status: {}", productId, product.getStatus());
+
+        String productMetaKey = "product:" + productId + ":meta";
+        String cachedMeta = stringRedisTemplate.opsForValue().get(productMetaKey);
+        BigDecimal price;
+        String statusStr;
+        boolean inAnySale;
+
+        if (cachedMeta != null) {
+            String[] parts = cachedMeta.split(":");
+            price = new BigDecimal(parts[0]);
+            statusStr = parts[1];
+            inAnySale = Boolean.parseBoolean(parts[2]);
+        } else {
+            Product product = productService.getProductById(productId);
+            price = product.getPrice();
+            statusStr = product.getStatus().name();
+            inAnySale = flashSaleService.isProductInAnySale(productId);
+            stringRedisTemplate.opsForValue().set(productMetaKey, price.toString() + ":" + statusStr + ":" + inAnySale, 10, java.util.concurrent.TimeUnit.MINUTES);
+        }
+
+        if (!"ACTIVE".equals(statusStr)) {
+            log.warn("Product {} is not active. Status: {}", productId, statusStr);
             throw new IllegalArgumentException("Product is not active");
         }
+
         if (!flashSaleService.isProductOnActiveSale(productId)) {
-            if (!flashSaleService.isProductInAnySale(productId)) {
+            if (!inAnySale) {
                 log.warn("Product {} is not associated with any flash sale", productId);
                 throw new IllegalArgumentException("Product is not part of any flash sale");
             } else {
@@ -154,79 +170,40 @@ public class PurchaseService {
         }
 
         UUID reservationId = UUID.randomUUID();
-        BigDecimal totalAmount = product.getPrice().multiply(new BigDecimal(quantity));
+        BigDecimal totalAmount = price.multiply(new BigDecimal(quantity));
+        final LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(5);
 
-        // Create the event object to serialize and save to outbox
+        // Create the event object to serialize and send directly to Kafka
         OrderRequestedEvent event = OrderRequestedEvent.builder()
                 .reservationId(reservationId)
                 .userId(userId)
                 .productId(productId)
                 .quantity(quantity)
                 .totalAmount(totalAmount)
+                .unitPrice(price)
+                .expiresAt(expiresAt)
                 .idempotencyKey(idempotencyKey)
                 .build();
 
-        String outboxPayload;
+        String eventPayload;
         try {
-            outboxPayload = objectMapper.writeValueAsString(event);
+            eventPayload = objectMapper.writeValueAsString(event);
         } catch (Exception e) {
             redisInventoryService.releaseStock(productId, quantity);
-            throw new RuntimeException("Failed to serialize OrderRequestedEvent for outbox", e);
+            throw new RuntimeException("Failed to serialize OrderRequestedEvent for Kafka", e);
         }
-
-        final LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(5);
 
         try {
-            // 7. DB Transaction: Create Reservation + Idempotency save + OutboxEvent save (no DB Inventory update)
-            transactionTemplate.execute(status -> {
-                // Save idempotency as PROCESSING
-                idempotencyRepository.save(Idempotency.builder()
-                        .idempotencyKey(idempotencyKey)
-                        .userId(userId)
-                        .productId(productId)
-                        .status(IdempotencyStatus.PROCESSING)
-                        .build());
-
-                // Create Reservation
-                Reservation reservation = Reservation.builder()
-                        .reservationId(reservationId)
-                        .userId(userId)
-                        .productId(productId)
-                        .quantity(quantity)
-                        .unitPrice(product.getPrice())
-                        .totalAmount(totalAmount)
-                        .status(ReservationStatus.ACTIVE)
-                        .expiresAt(expiresAt)
-                        .build();
-
-                reservationRepository.save(reservation);
-
-                // Create OutboxEvent
-                OutboxEvent outboxEvent = OutboxEvent.builder()
-                        .eventId(UUID.randomUUID())
-                        .aggregateType("RESERVATION")
-                        .aggregateId(reservationId)
-                        .eventType("ORDER_REQUESTED")
-                        .payload(outboxPayload)
-                        .status(OutboxStatus.PENDING)
-                        .retryCount(0)
-                        .build();
-
-                outboxEventRepository.save(outboxEvent);
-
-                return null;
-            });
+            // Asynchronously send to Kafka without blocking .get()
+            kafkaTemplate.send("flashflow.orders", reservationId.toString(), eventPayload);
         } catch (Exception e) {
-            log.error("Database transaction failed for reservation {}. Releasing stock in Redis...", reservationId, e);
-            // Compensating action: Release stock in Redis
+            log.error("Failed to publish OrderRequestedEvent to Kafka for reservation {}. Releasing stock in Redis...", reservationId, e);
             redisInventoryService.releaseStock(productId, quantity);
-            throw e;
+            throw new RuntimeException("Kafka publish failed", e);
         }
 
-        // 8. Redis Save Reservation
+        // 7. Write Reservation & Idempotency status to Redis
         redisReservationService.saveReservation(reservationId, ReservationStatus.ACTIVE.name(), 300L);
-
-        // Redis save idempotency as PROCESSING
         redisIdempotencyService.saveIdempotency(userId, idempotencyKey, IdempotencyStatus.PROCESSING.name(), null, null, 86400L);
 
         log.info("Purchase reservation successfully created: {}", reservationId);
