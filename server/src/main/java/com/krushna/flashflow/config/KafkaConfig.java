@@ -16,7 +16,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic ordersTopic() {
         return TopicBuilder.name("flashflow.orders")
-                .partitions(3)
+                .partitions(8)
                 .replicas(1)
                 .build();
     }
@@ -24,7 +24,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic paymentsTopic() {
         return TopicBuilder.name("flashflow.payments")
-                .partitions(3)
+                .partitions(8)
                 .replicas(1)
                 .build();
     }
@@ -32,7 +32,7 @@ public class KafkaConfig {
     @Bean
     public NewTopic reservationsTopic() {
         return TopicBuilder.name("flashflow.reservations")
-                .partitions(3)
+                .partitions(8)
                 .replicas(1)
                 .build();
     }
