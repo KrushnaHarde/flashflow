@@ -45,26 +45,36 @@ public class OrderFulfillmentService {
     public void fulfillOrder(OrderRequestedEvent event) {
         log.info("Fulfilling order for reservation: {}", event.getReservationId());
 
-        // 1. Validate reservation in DB
-        Reservation reservation = reservationRepository.findById(event.getReservationId())
+        // 1. Check if Reservation already exists in DB (idempotency guard)
+        Reservation existingReservation = reservationRepository.findById(event.getReservationId())
                 .orElse(null);
-        if (reservation == null) {
-            log.warn("Reservation not found in DB: {}", event.getReservationId());
-            return;
-        }
-        if (reservation.getStatus() != ReservationStatus.ACTIVE) {
-            log.info("Reservation {} is not ACTIVE. Current status: {}. Skipping fulfillment.", 
-                    event.getReservationId(), reservation.getStatus());
+        if (existingReservation != null) {
+            log.info("Reservation {} already exists in DB with status: {}. Skipping fulfillment.", 
+                    event.getReservationId(), existingReservation.getStatus());
             return;
         }
 
-        // 2. Check if Order already exists (idempotency check)
+        // 2. Check if Order already exists in DB
         if (orderRepository.existsByReservationId(event.getReservationId())) {
             log.info("Order already exists for reservation: {}. Skipping.", event.getReservationId());
             return;
         }
 
-        // 3. Create Order
+        // 3. Create and Save Reservation directly as CONFIRMED
+        Reservation reservation = Reservation.builder()
+                .reservationId(event.getReservationId())
+                .userId(event.getUserId())
+                .productId(event.getProductId())
+                .quantity(event.getQuantity())
+                .unitPrice(event.getUnitPrice())
+                .totalAmount(event.getTotalAmount())
+                .status(ReservationStatus.CONFIRMED)
+                .expiresAt(event.getExpiresAt())
+                .build();
+        reservationRepository.save(reservation);
+        log.info("Saved Reservation {} in DB with status CONFIRMED", event.getReservationId());
+
+        // 4. Create and Save Order
         UUID orderId = UUID.randomUUID();
         Order order = Order.builder()
                 .orderId(orderId)
@@ -72,14 +82,14 @@ public class OrderFulfillmentService {
                 .productId(event.getProductId())
                 .reservationId(event.getReservationId())
                 .quantity(event.getQuantity())
-                .unitPrice(reservation.getUnitPrice())
+                .unitPrice(event.getUnitPrice())
                 .totalAmount(event.getTotalAmount())
                 .status(OrderStatus.CREATED)
                 .build();
         orderRepository.save(order);
         log.info("Created Order {} for reservation: {}", orderId, event.getReservationId());
 
-        // 4. Create Payment (PENDING status)
+        // 5. Create and Save Payment (PENDING status)
         UUID paymentId = UUID.randomUUID();
         Payment payment = Payment.builder()
                 .paymentId(paymentId)
@@ -90,7 +100,7 @@ public class OrderFulfillmentService {
         paymentRepository.save(payment);
         log.info("Created Payment {} in PENDING state for Order {}", paymentId, orderId);
 
-        // 5. Update DB Inventory: availableStock and totalStock are decremented asynchronously.
+        // 6. Update DB Inventory
         Inventory inventory = inventoryRepository.findById(event.getProductId())
                 .orElseThrow(() -> new IllegalArgumentException("Inventory not found for product: " + event.getProductId()));
 
@@ -103,7 +113,7 @@ public class OrderFulfillmentService {
         log.info("Updated DB Inventory for product: {}. Decremented totalStock and availableStock by {}", 
                 event.getProductId(), event.getQuantity());
 
-        // 6. Insert OutboxEvent
+        // 7. Insert OutboxEvent for PAYMENT relay
         String orderPayload;
         try {
             orderPayload = objectMapper.writeValueAsString(order);
@@ -123,31 +133,32 @@ public class OrderFulfillmentService {
         outboxEventRepository.save(outboxEvent);
         log.info("Inserted OutboxEvent for Order {}", orderId);
 
-        // 7. Update Reservation status to CONFIRMED
-        reservation.setStatus(ReservationStatus.CONFIRMED);
-        reservationRepository.save(reservation);
-        log.info("Updated DB Reservation status to CONFIRMED for: {}", event.getReservationId());
+        // 8. Insert Idempotency record with status ORDER_CREATED
+        PurchaseResponseDto responseDto = PurchaseResponseDto.builder()
+                .reservationId(event.getReservationId())
+                .status("ORDER_CREATED")
+                .totalAmount(event.getTotalAmount())
+                .expiresAt(event.getExpiresAt())
+                .build();
 
-        // 8. Update DB Idempotency status to ORDER_CREATED
-        Idempotency idempotency = idempotencyRepository.findById(new IdempotencyId(event.getIdempotencyKey(), event.getUserId()))
-                .orElse(null);
-        if (idempotency != null) {
-            PurchaseResponseDto responseDto = PurchaseResponseDto.builder()
-                    .reservationId(event.getReservationId())
-                    .status("ORDER_CREATED")
-                    .totalAmount(event.getTotalAmount())
-                    .build();
-            try {
-                String responseJson = objectMapper.writeValueAsString(responseDto);
-                idempotency.setStatus(IdempotencyStatus.ORDER_CREATED);
-                idempotency.setResponseSnapshot(responseJson);
-                idempotency.setOrderId(orderId);
-                idempotencyRepository.save(idempotency);
-                log.info("Updated DB Idempotency status to ORDER_CREATED for key: {}", event.getIdempotencyKey());
-            } catch (Exception e) {
-                log.error("Failed to serialize idempotency response snapshot", e);
-            }
+        String responseJson;
+        try {
+            responseJson = objectMapper.writeValueAsString(responseDto);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to serialize response snapshot", e);
         }
+
+        Idempotency idempotency = Idempotency.builder()
+                .idempotencyKey(event.getIdempotencyKey())
+                .userId(event.getUserId())
+                .productId(event.getProductId())
+                .status(IdempotencyStatus.ORDER_CREATED)
+                .orderId(orderId)
+                .responseSnapshot(responseJson)
+                .build();
+        idempotencyRepository.save(idempotency);
+        log.info("Saved Idempotency record in DB with status ORDER_CREATED for user: {}, key: {}", 
+                event.getUserId(), event.getIdempotencyKey());
 
         // Register transaction synchronization to execute Redis updates AFTER DB transaction commits
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
