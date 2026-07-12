@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import com.krushna.flashflow.inventory.redis.RedisReservationService;
 
 @RestController
 @Slf4j
@@ -25,6 +26,7 @@ public class OrderController {
     private final OrderRepository orderRepository;
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
+    private final RedisReservationService redisReservationService;
 
     @GetMapping("/orders/{orderId}")
     public ResponseEntity<Order> getOrderById(
@@ -80,11 +82,21 @@ public class OrderController {
         log.info("Request to get purchase status for reservation: {}", reservationId);
 
         Reservation reservation = reservationRepository.findById(reservationId)
-                .orElseThrow(() -> new ResourceNotFoundException("Reservation not found with id: " + reservationId));
+                .orElse(null);
 
-        // Check authorization
-        if (authenticatedUser.getRole() != Role.ADMIN && !reservation.getUserId().equals(authenticatedUser.getUserId())) {
-            throw new AccessDeniedException("You are not authorized to view the status of this reservation");
+        String reservationStatusStr = null;
+        if (reservation == null) {
+            // Check Redis fallback status
+            reservationStatusStr = redisReservationService.getReservationStatus(reservationId);
+            if (reservationStatusStr == null) {
+                throw new ResourceNotFoundException("Reservation not found with id: " + reservationId);
+            }
+        } else {
+            // Check authorization
+            if (authenticatedUser.getRole() != Role.ADMIN && !reservation.getUserId().equals(authenticatedUser.getUserId())) {
+                throw new AccessDeniedException("You are not authorized to view the status of this reservation");
+            }
+            reservationStatusStr = reservation.getStatus().name();
         }
 
         Order order = orderRepository.findByReservationId(reservationId).orElse(null);
@@ -95,7 +107,7 @@ public class OrderController {
 
         PurchaseStatusResponse response = PurchaseStatusResponse.builder()
                 .reservationId(reservationId)
-                .reservationStatus(reservation.getStatus().name())
+                .reservationStatus(reservationStatusStr)
                 .orderId(order != null ? order.getOrderId() : null)
                 .orderStatus(order != null ? order.getStatus().name() : null)
                 .paymentStatus(payment != null ? payment.getStatus().name() : null)
