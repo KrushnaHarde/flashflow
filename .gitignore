@@ -35,3 +35,22 @@ build/
 implementation_plan_by phase.md
 .env
 
+# Load test reports
+results*.json
+summary*.html
+summary*.csv
+summary*.md
+summary.html
+summary.csv
+summary.md
+results.json
+load-tests/users_pool.json
+load-tests/system_metrics.json
+load-tests/stop_collector.tmp
+
+# Historic runs, sweep runs, and report directories
+load-tests/history/
+load-tests/reports/
+load-tests/sweep/
+sweep_report.md
+
