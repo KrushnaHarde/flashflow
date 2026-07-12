@@ -26,6 +26,9 @@ public class IdempotencySweepScheduler {
     @Value("${flashflow.idempotency.stuck-timeout-minutes:5}")
     private int stuckTimeoutMinutes;
 
+    @Value("${flashflow.schedulers.enabled:true}")
+    private boolean schedulersEnabled;
+
     public IdempotencySweepScheduler(
             IdempotencyRepository idempotencyRepository,
             RedisIdempotencyService redisIdempotencyService,
@@ -40,6 +43,10 @@ public class IdempotencySweepScheduler {
     @Scheduled(fixedDelay = 60000) // Run every 1 minute
     @Transactional
     public void sweepStuckIdempotencyKeys() {
+        if (!schedulersEnabled) {
+            log.debug("IdempotencySweepScheduler is disabled by config.");
+            return;
+        }
         log.info("Running stuck idempotency keys sweep task...");
         LocalDateTime threshold = LocalDateTime.now().minusMinutes(stuckTimeoutMinutes);
         List<Idempotency> stuckKeys = idempotencyRepository.findByStatusAndCreatedAtBefore(
