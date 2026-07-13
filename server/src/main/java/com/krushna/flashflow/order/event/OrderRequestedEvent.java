@@ -21,4 +21,5 @@ public class OrderRequestedEvent {
     private BigDecimal unitPrice;
     private java.time.LocalDateTime expiresAt;
     private String idempotencyKey;
+    private String traceId;
 }

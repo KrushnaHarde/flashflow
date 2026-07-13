@@ -49,6 +49,9 @@ public class Order {
     @Column(nullable = false, length = 50)
     private OrderStatus status;
 
+    @Column(name = "trace_id")
+    private String traceId;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
