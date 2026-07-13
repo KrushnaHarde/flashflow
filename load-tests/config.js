@@ -48,8 +48,8 @@ export const STAGES = [
   { name: '100_rps', target: 100, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 50, maxVUs: 300 },
   { name: '500_rps', target: 500, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 200, maxVUs: 1500 },
   { name: '1k_rps', target: 1000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 500, maxVUs: 3000 },
-  { name: '5k_rps', target: 5000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 1500, maxVUs: 8000 },
-  { name: '10k_rps', target: 10000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 3000, maxVUs: 15000 },
+  { name: '5k_rps', target: 5000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 1500, maxVUs: 4000 },
+  { name: '10k_rps', target: 10000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 3000, maxVUs: 6000 },
 ];
 
 // Helper to determine if we are running a short debugging test
