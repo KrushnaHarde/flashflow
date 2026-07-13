@@ -26,10 +26,23 @@ function parseDuration(durationStr) {
 
 // 1. Programmatically assemble sequential scenarios for each stage
 let currentStartTimeSec = 0;
+const maxVusOverride = __ENV.MAX_VUS_OVERRIDE ? parseInt(__ENV.MAX_VUS_OVERRIDE, 10) : null;
 
 STAGES_CONFIGURED.forEach((stage) => {
   const scenarioName = `stage_${stage.name}`;
   
+  let preAllocatedVUs = stage.preAllocatedVUs;
+  let maxVUs = stage.maxVUs;
+
+  if (maxVusOverride) {
+    if (preAllocatedVUs > maxVusOverride) {
+      preAllocatedVUs = maxVusOverride;
+    }
+    if (maxVUs > maxVusOverride) {
+      maxVUs = maxVusOverride;
+    }
+  }
+
   // Define scenario configuration
   options.scenarios[scenarioName] = {
     executor: 'ramping-arrival-rate',
@@ -39,8 +52,8 @@ STAGES_CONFIGURED.forEach((stage) => {
       { target: stage.target, duration: stage.durationRamp }, // Ramp-up period
       { target: stage.target, duration: stage.durationHold }, // Hold load period
     ],
-    preAllocatedVUs: stage.preAllocatedVUs,
-    maxVUs: stage.maxVUs,
+    preAllocatedVUs: preAllocatedVUs,
+    maxVUs: maxVUs,
     tags: { stage: stage.name },
     startTime: `${currentStartTimeSec}s`, // Offsets scenario start so they run sequentially
     exec: 'runTest', // Function to execute
