@@ -23,6 +23,8 @@ public class PurchaseController {
         log.info("Received purchase request for user: {}, product: {}", request.getUserId(), request.getProductId());
         PurchaseResponseDto response = purchaseService.purchase(request);
         log.info("Purchase request successfully accepted. Reservation: {}", response.getReservationId());
-        return ResponseEntity.accepted().body(response);
+        return ResponseEntity.accepted()
+                .header("X-Trace-Id", response.getReservationId().toString())
+                .body(response);
     }
 }

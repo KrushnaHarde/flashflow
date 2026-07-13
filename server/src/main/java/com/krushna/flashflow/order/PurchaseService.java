@@ -103,7 +103,7 @@ public class PurchaseService {
             User user = userRepository.findById(userId)
                     .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
             enabled = user.isEnabled();
-            stringRedisTemplate.opsForValue().set(userEnabledKey, String.valueOf(enabled), 10, java.util.concurrent.TimeUnit.MINUTES);
+            stringRedisTemplate.opsForValue().set(userEnabledKey, String.valueOf(enabled), 60, java.util.concurrent.TimeUnit.SECONDS);
         }
         if (!enabled) {
             log.warn("User {} is disabled", userId);
@@ -131,7 +131,7 @@ public class PurchaseService {
             price = product.getPrice();
             statusStr = product.getStatus().name();
             inAnySale = flashSaleService.isProductInAnySale(productId);
-            stringRedisTemplate.opsForValue().set(productMetaKey, price.toString() + ":" + statusStr + ":" + inAnySale, 10, java.util.concurrent.TimeUnit.MINUTES);
+            stringRedisTemplate.opsForValue().set(productMetaKey, price.toString() + ":" + statusStr + ":" + inAnySale, 60, java.util.concurrent.TimeUnit.SECONDS);
         }
 
         if (!"ACTIVE".equals(statusStr)) {
@@ -173,6 +173,8 @@ public class PurchaseService {
         BigDecimal totalAmount = price.multiply(new BigDecimal(quantity));
         final LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(5);
 
+        log.info("{\"traceId\":\"{}\", \"event\":\"reserved in Redis\"}", reservationId);
+
         // Create the event object to serialize and send directly to Kafka
         OrderRequestedEvent event = OrderRequestedEvent.builder()
                 .reservationId(reservationId)
@@ -183,19 +185,40 @@ public class PurchaseService {
                 .unitPrice(price)
                 .expiresAt(expiresAt)
                 .idempotencyKey(idempotencyKey)
+                .traceId(reservationId.toString())
                 .build();
 
         String eventPayload;
+        String metaPayload;
         try {
             eventPayload = objectMapper.writeValueAsString(event);
+            
+            com.krushna.flashflow.reservation.RedisReservationMeta meta = com.krushna.flashflow.reservation.RedisReservationMeta.builder()
+                    .reservationId(reservationId)
+                    .userId(userId)
+                    .productId(productId)
+                    .quantity(quantity)
+                    .unitPrice(price)
+                    .totalAmount(totalAmount)
+                    .idempotencyKey(idempotencyKey)
+                    .traceId(reservationId.toString())
+                    .retryCount(0)
+                    .expiresAt(expiresAt)
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            metaPayload = objectMapper.writeValueAsString(meta);
         } catch (Exception e) {
             redisInventoryService.releaseStock(productId, quantity);
             throw new RuntimeException("Failed to serialize OrderRequestedEvent for Kafka", e);
         }
 
         try {
-            // Asynchronously send to Kafka without blocking .get()
-            kafkaTemplate.send("flashflow.orders", reservationId.toString(), eventPayload);
+            // Asynchronously send to Kafka with traceId header
+            org.apache.kafka.clients.producer.ProducerRecord<String, String> record =
+                    new org.apache.kafka.clients.producer.ProducerRecord<>("flashflow.orders", reservationId.toString(), eventPayload);
+            record.headers().add("traceId", reservationId.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            kafkaTemplate.send(record);
+            log.info("{\"traceId\":\"{}\", \"event\":\"published to Kafka\"}", reservationId);
         } catch (Exception e) {
             log.error("Failed to publish OrderRequestedEvent to Kafka for reservation {}. Releasing stock in Redis...", reservationId, e);
             redisInventoryService.releaseStock(productId, quantity);
@@ -204,9 +227,13 @@ public class PurchaseService {
 
         // 7. Write Reservation & Idempotency status to Redis
         redisReservationService.saveReservation(reservationId, ReservationStatus.ACTIVE.name(), 300L);
+        stringRedisTemplate.opsForValue().set("reservation:" + reservationId + ":meta", metaPayload, 300L, java.util.concurrent.TimeUnit.SECONDS);
         redisIdempotencyService.saveIdempotency(userId, idempotencyKey, IdempotencyStatus.PROCESSING.name(), null, null, 86400L);
 
         log.info("Purchase reservation successfully created: {}", reservationId);
+
+        // Document Tradeoff: Redis-only checks authorize requests immediately to maximize throughput. 
+        // Background sweep checks for mismatches asynchronously for audit trail and detection.
 
         return PurchaseResponseDto.builder()
                 .reservationId(reservationId)
