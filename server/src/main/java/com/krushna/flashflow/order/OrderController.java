@@ -27,6 +27,7 @@ public class OrderController {
     private final ReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
     private final RedisReservationService redisReservationService;
+    private final org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
 
     @GetMapping("/orders/{orderId}")
     public ResponseEntity<Order> getOrderById(
@@ -114,5 +115,56 @@ public class OrderController {
                 .build();
 
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/api/v1/trace/{traceId}")
+    public ResponseEntity<java.util.Map<String, Object>> traceRequest(@PathVariable String traceId) {
+        log.info("Tracing request for trace ID: {}", traceId);
+
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+        result.put("traceId", traceId);
+
+        // 1. Query Redis State
+        String reservationKey = "reservation:" + traceId;
+        String reservationMetaKey = "reservation:" + traceId + ":meta";
+
+        String redisStatus = stringRedisTemplate.opsForValue().get(reservationKey);
+        String redisMeta = stringRedisTemplate.opsForValue().get(reservationMetaKey);
+
+        java.util.Map<String, Object> redisState = new java.util.HashMap<>();
+        redisState.put("statusKey", reservationKey);
+        redisState.put("statusValue", redisStatus);
+        redisState.put("metaKey", reservationMetaKey);
+        redisState.put("metaValue", redisMeta);
+        result.put("redisState", redisState);
+
+        // 2. Query Postgres State
+        UUID uuid;
+        try {
+            uuid = UUID.fromString(traceId);
+        } catch (Exception e) {
+            uuid = null;
+        }
+
+        if (uuid != null) {
+            Reservation dbReservation = reservationRepository.findById(uuid).orElse(null);
+            result.put("postgresReservation", dbReservation);
+
+            Order dbOrder = orderRepository.findByReservationId(uuid).orElse(null);
+            result.put("postgresOrder", dbOrder);
+
+            if (dbOrder != null) {
+                Payment dbPayment = paymentRepository.findByOrderId(dbOrder.getOrderId()).orElse(null);
+                result.put("postgresPayment", dbPayment);
+            } else {
+                result.put("postgresPayment", null);
+            }
+        } else {
+            result.put("postgresReservation", null);
+            result.put("postgresOrder", null);
+            result.put("postgresPayment", null);
+        }
+
+        return ResponseEntity.ok(result);
     }
 }
