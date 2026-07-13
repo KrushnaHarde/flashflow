@@ -54,5 +54,6 @@ load-tests/reports/
 load-tests/sweep/
 sweep_report.md
 load-tests/k6_summary.json
+load-tests/k6_run.log
 
 
