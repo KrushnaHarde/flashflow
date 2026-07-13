@@ -29,6 +29,9 @@ public class OrderController {
     private final RedisReservationService redisReservationService;
     private final org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
 
+    @org.springframework.beans.factory.annotation.Value("${spring.kafka.bootstrap-servers:localhost:9092}")
+    private String kafkaBootstrapServers;
+
     @GetMapping("/orders/{orderId}")
     public ResponseEntity<Order> getOrderById(
             @PathVariable UUID orderId,
@@ -166,5 +169,61 @@ public class OrderController {
         }
 
         return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/api/v1/metrics/kafka-lag")
+    public ResponseEntity<java.util.Map<String, Object>> getKafkaLag() {
+        long maxLag = 0;
+        String groupName = "flashflow-group";
+        
+        java.util.Properties props = new java.util.Properties();
+        props.put(org.apache.kafka.clients.admin.AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBootstrapServers);
+        
+        try (org.apache.kafka.clients.admin.AdminClient adminClient = org.apache.kafka.clients.admin.AdminClient.create(props)) {
+            // Find active consumer groups matching "flashflow-group"
+            java.util.Collection<org.apache.kafka.clients.admin.ConsumerGroupListing> groups = 
+                adminClient.listConsumerGroups().all().get(5, java.util.concurrent.TimeUnit.SECONDS);
+            for (org.apache.kafka.clients.admin.ConsumerGroupListing g : groups) {
+                if (g.groupId().contains("flashflow-group")) {
+                    groupName = g.groupId();
+                    break;
+                }
+            }
+
+            org.apache.kafka.clients.admin.ListConsumerGroupOffsetsResult offsetsResult = 
+                adminClient.listConsumerGroupOffsets(groupName);
+            java.util.Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets = 
+                offsetsResult.partitionsToOffsetAndMetadata().get(5, java.util.concurrent.TimeUnit.SECONDS);
+            
+            if (offsets != null && !offsets.isEmpty()) {
+                java.util.Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.admin.OffsetSpec> requestOffsets = new java.util.HashMap<>();
+                for (org.apache.kafka.common.TopicPartition tp : offsets.keySet()) {
+                    requestOffsets.put(tp, org.apache.kafka.clients.admin.OffsetSpec.latest());
+                }
+                
+                java.util.Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.admin.ListOffsetsResult.ListOffsetsResultInfo> endOffsets = 
+                    adminClient.listOffsets(requestOffsets).all().get(5, java.util.concurrent.TimeUnit.SECONDS);
+                
+                for (java.util.Map.Entry<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> entry : offsets.entrySet()) {
+                    org.apache.kafka.common.TopicPartition tp = entry.getKey();
+                    long currentOffset = entry.getValue().offset();
+                    org.apache.kafka.clients.admin.ListOffsetsResult.ListOffsetsResultInfo endOffsetInfo = endOffsets.get(tp);
+                    if (endOffsetInfo != null) {
+                        long endOffset = endOffsetInfo.offset();
+                        long lag = endOffset - currentOffset;
+                        if (lag > maxLag) {
+                            maxLag = lag;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to query Kafka consumer group lag remotely", e);
+        }
+
+        java.util.Map<String, Object> response = new java.util.HashMap<>();
+        response.put("maxLag", maxLag);
+        response.put("groupName", groupName);
+        return ResponseEntity.ok(response);
     }
 }
