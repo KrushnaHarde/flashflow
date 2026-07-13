@@ -16,6 +16,13 @@ public class PaymentRequestedConsumer {
     private final PaymentFulfillmentService paymentFulfillmentService;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
+    private io.micrometer.core.instrument.Counter optLockRetryCounter;
+
+    @jakarta.annotation.PostConstruct
+    public void init() {
+        this.optLockRetryCounter = meterRegistry.counter("optimistic.lock.retry.count");
+    }
 
     @KafkaListener(topics = "flashflow.payments", groupId = "flashflow-group", concurrency = "8")
     public void consume(String message) throws Exception {
@@ -30,6 +37,7 @@ public class PaymentRequestedConsumer {
                 paymentFulfillmentService.fulfillPayment(order);
                 break;
             } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                optLockRetryCounter.increment();
                 if (attempts >= 10) {
                     log.error("Optimistic locking failed after 10 attempts for order {}", order.getOrderId(), e);
                     throw e;

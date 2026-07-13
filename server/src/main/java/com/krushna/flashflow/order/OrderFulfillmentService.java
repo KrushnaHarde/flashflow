@@ -70,6 +70,7 @@ public class OrderFulfillmentService {
                 .totalAmount(event.getTotalAmount())
                 .status(ReservationStatus.CONFIRMED)
                 .expiresAt(event.getExpiresAt())
+                .traceId(event.getTraceId())
                 .build();
         reservationRepository.save(reservation);
         log.info("Saved Reservation {} in DB with status CONFIRMED", event.getReservationId());
@@ -85,8 +86,10 @@ public class OrderFulfillmentService {
                 .unitPrice(event.getUnitPrice())
                 .totalAmount(event.getTotalAmount())
                 .status(OrderStatus.CREATED)
+                .traceId(event.getTraceId())
                 .build();
         orderRepository.save(order);
+        log.info("{\"traceId\":\"{}\", \"event\":\"order created in Postgres\"}", event.getReservationId());
         log.info("Created Order {} for reservation: {}", orderId, event.getReservationId());
 
         // 5. Create and Save Payment (PENDING status)
