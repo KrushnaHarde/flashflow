@@ -4,6 +4,7 @@
 SCENARIO="smoke"
 BASE_URL="http://localhost:8080"
 SHORT_RUN=false
+MAX_VUS_OVERRIDE=""
 
 # Simple CLI parsing
 while [[ "$#" -gt 0 ]]; do
@@ -11,12 +12,22 @@ while [[ "$#" -gt 0 ]]; do
         smoke|ramp|spike) SCENARIO="$1"; shift ;;
         http*) BASE_URL="$1"; shift ;;
         --short-run) SHORT_RUN=true; shift ;;
+        --max-vus-override) MAX_VUS_OVERRIDE="$2"; shift 2 ;;
         *) echo "Unknown parameter passed: $1"; exit 1 ;;
     esac
 done
 
 # 1. Verify k6 installation
-if ! command -v k6 &> /dev/null; then
+K6_CMD="k6"
+if command -v k6 &> /dev/null; then
+    K6_CMD="k6"
+elif command -v k6.exe &> /dev/null; then
+    K6_CMD="k6.exe"
+elif [ -f "/c/Program Files/k6/k6.exe" ]; then
+    K6_CMD="/c/Program Files/k6/k6.exe"
+elif [ -f "/mnt/c/Program Files/k6/k6.exe" ]; then
+    K6_CMD="/mnt/c/Program Files/k6/k6.exe"
+else
     echo "Error: k6 is not installed or not in PATH."
     echo "To install k6 on Debian/Ubuntu Linux:"
     echo "  sudo gpg -k"
@@ -52,9 +63,47 @@ else
     fi
 fi
 
+if [ -n "$MAX_VUS_OVERRIDE" ]; then
+    export MAX_VUS_OVERRIDE
+    echo "VU Override Target : $MAX_VUS_OVERRIDE VUs max"
+fi
+
 echo "Executing Scenario : $SCENARIO"
 echo "Target BASE_URL    : $BASE_URL"
 echo ""
+
+# Pre-flight available memory check
+MEM_PER_VU_MB=2
+MAX_VUS=1 # Default for smoke
+
+if [ "$SCENARIO" = "ramp" ]; then
+    MAX_VUS=6000
+elif [ "$SCENARIO" = "spike" ]; then
+    if [ "$SHORT_RUN" = true ]; then
+        MAX_VUS=300
+    else
+        MAX_VUS=15000
+    fi
+fi
+
+if [ -n "$MAX_VUS_OVERRIDE" ]; then
+    MAX_VUS=$MAX_VUS_OVERRIDE
+fi
+
+REQUIRED_MEM_MB=$(( MAX_VUS * MEM_PER_VU_MB ))
+
+if command -v free &> /dev/null; then
+    AVAILABLE_MEM_MB=$(free -m | awk '/^Mem:/{print $7}')
+    if [ -n "$AVAILABLE_MEM_MB" ]; then
+        echo "Pre-flight memory check: Available: ${AVAILABLE_MEM_MB}MB, Required: ${REQUIRED_MEM_MB}MB (for ${MAX_VUS} max VUs)"
+        if [ "$AVAILABLE_MEM_MB" -lt "$REQUIRED_MEM_MB" ]; then
+            echo "ERROR: Insufficient memory headroom on this host."
+            echo "Required: ${REQUIRED_MEM_MB}MB, but only ${AVAILABLE_MEM_MB}MB is available."
+            echo "To prevent k6 OOM crash, please set --max-vus-override to a lower value (e.g. --max-vus-override 1000)."
+            exit 1
+        fi
+    fi
+fi
 
 # 4. Generate user pool for the test run
 echo "Pre-registering 20,000 test users at $BASE_URL..."
@@ -62,9 +111,24 @@ USERS_FILE="load-tests/users_pool.json"
 # Ensure directory exists
 mkdir -p load-tests
 
-curl -s -X POST "$BASE_URL/api/v1/auth/bulk-register?count=20000" -o "$USERS_FILE" --max-time 120
-if [ $? -eq 0 ] && [ -f "$USERS_FILE" ] && [ s$(cat "$USERS_FILE") != "s" ]; then
-    echo "Successfully pre-registered users and generated $USERS_FILE."
+curl_request() {
+    local url="$1"
+    local outfile="$2"
+    local timeout="$3"
+    if [[ "$url" =~ "localhost" || "$url" =~ "127.0.0.1" ]]; then
+        if command -v curl.exe &> /dev/null; then
+            curl.exe -s -X POST "$url" -o "$outfile" --max-time "$timeout"
+            return $?
+        fi
+    fi
+    curl -s -X POST "$url" -o "$outfile" --max-time "$timeout"
+    return $?
+}
+
+curl_request "$BASE_URL/api/v1/auth/bulk-register?count=20000" "$USERS_FILE" 120
+if [ $? -eq 0 ] && [ -s "$USERS_FILE" ]; then
+    USER_COUNT=$(python3 -c "import json; print(len(json.load(open('$USERS_FILE'))))" 2>/dev/null || echo "unknown")
+    echo "Successfully pre-registered users and generated $USERS_FILE. (Count: $USER_COUNT)"
 else
     echo "Warning: Failed to pre-register users or empty response returned."
     echo "[]" > "$USERS_FILE"
@@ -107,10 +171,17 @@ K6_ARGS=("run" "--env" "BASE_URL=$BASE_URL")
 if [ "$SHORT_RUN" = true ]; then
     K6_ARGS+=("--env" "SHORT_RUN=true")
 fi
+if [ -n "$MAX_VUS_OVERRIDE" ]; then
+    K6_ARGS+=("--env" "MAX_VUS_OVERRIDE=$MAX_VUS_OVERRIDE")
+fi
 K6_ARGS+=("$SCRIPT_FILE")
 
 echo "Command: k6 ${K6_ARGS[*]}"
-k6 "${K6_ARGS[@]}"
+rm -f load-tests/k6_run.log
+# Run k6 and pipe to tee to output to both console and log file
+"$K6_CMD" "${K6_ARGS[@]}" 2>&1 | tee load-tests/k6_run.log
+K6_EXIT_CODE=${PIPESTATUS[0]}
+export K6_EXIT_CODE
 
 # 8. Stop metrics collector and wait for file persistence
 echo "Stopping background metrics collector..."
