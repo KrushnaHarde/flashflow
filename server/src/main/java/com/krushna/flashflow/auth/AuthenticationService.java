@@ -28,6 +28,7 @@ public class AuthenticationService {
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
     private final JdbcTemplate jdbcTemplate;
+    private final org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
 
     @Transactional
     public User register(RegisterRequest request) {
@@ -177,6 +178,11 @@ public class AuthenticationService {
     public java.util.List<java.util.Map<String, Object>> bulkRegister(int count) {
         log.info("Performing clean up of existing bulk users...");
         userRepository.deleteBulkUsers();
+        jdbcTemplate.execute("DELETE FROM payments");
+        jdbcTemplate.execute("DELETE FROM orders");
+        jdbcTemplate.execute("DELETE FROM reservations");
+        jdbcTemplate.execute("DELETE FROM outbox_events");
+        jdbcTemplate.execute("DELETE FROM idempotency_keys");
 
         log.info("Bulk registering {} users...", count);
         final java.util.List<java.util.Map<String, Object>> userPool = new java.util.ArrayList<>();
@@ -233,5 +239,21 @@ public class AuthenticationService {
         
         log.info("Bulk registered {} users successfully.", count);
         return userPool;
+    }
+
+    @Transactional
+    public User updateUserStatus(UUID userId, boolean enabled) {
+        log.info("Updating status of user ID: {} to enabled: {}", userId, enabled);
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        user.setEnabled(enabled);
+        User savedUser = userRepository.save(user);
+
+        // Evict cache key synchronously
+        String userEnabledKey = "user:" + userId + ":enabled";
+        stringRedisTemplate.delete(userEnabledKey);
+
+        log.info("Successfully updated user status and evicted cache for user: {}", userId);
+        return savedUser;
     }
 }

@@ -169,4 +169,14 @@ public class AuthController {
                 .build();
         return ResponseEntity.ok(responseDto);
     }
+
+    @PostMapping("/users/{userId}/status")
+    @Operation(summary = "Update user enabled status", description = "Updates whether a user is enabled and evicts their Redis cache.")
+    public ResponseEntity<Void> updateUserStatus(
+            @org.springframework.web.bind.annotation.PathVariable java.util.UUID userId,
+            @org.springframework.web.bind.annotation.RequestParam boolean enabled) {
+        log.info("Received request to update user status: {} -> {}", userId, enabled);
+        authenticationService.updateUserStatus(userId, enabled);
+        return ResponseEntity.ok().build();
+    }
 }

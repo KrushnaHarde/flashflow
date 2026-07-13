@@ -18,6 +18,7 @@ public class ProductService {
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
     private final RedisInventoryService redisInventoryService;
+    private final org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
 
     public List<Product> getAllProducts() {
         log.info("Fetching all products from database");
@@ -71,6 +72,10 @@ public class ProductService {
         }
 
         Product savedProduct = productRepository.save(product);
+        
+        // Evict cache key
+        stringRedisTemplate.delete("product:" + id + ":meta");
+        
         log.info("Successfully updated product ID: {}", id);
         return savedProduct;
     }
@@ -88,6 +93,9 @@ public class ProductService {
             log.info("Warmed up Redis stock for activated product {}: {}", id, inventory.getAvailableStock());
         });
 
+        // Evict cache key
+        stringRedisTemplate.delete("product:" + id + ":meta");
+
         log.info("Successfully activated product ID: {}", id);
         return savedProduct;
     }
@@ -98,6 +106,10 @@ public class ProductService {
         Product product = getProductById(id);
         product.setStatus(ProductStatus.INACTIVE);
         Product savedProduct = productRepository.save(product);
+        
+        // Evict cache key
+        stringRedisTemplate.delete("product:" + id + ":meta");
+        
         log.info("Successfully deactivated product ID: {}", id);
         return savedProduct;
     }
