@@ -5,28 +5,34 @@ This document describes the high-level architecture of FlashFlow, designed for h
 ## Core Components
 
 1. **Vite/React Frontend Client**: Modern React SPA (`client/`) powered by Tailwind CSS 4 that coordinates authentication, catalog browsing, purchase requests (sending idempotency keys), and polling order status.
-2. **Spring Boot App**: The main application server (`server/`) exposing REST endpoints, managing authentication filters, handling transactional outbox events, and running background schedules.
-3. **PostgreSQL**: The primary database for persistent data (Users, Products, Inventory, Orders, Payments, Idempotency keys, Outbox Events).
-4. **Redis**: In-memory data store for handling high-concurrency tasks, such as rate limiting, idempotency checks, and pre-deducting stock/reservations to avoid overwhelming the database.
-5. **Kafka**: Event-streaming platform for asynchronous processing. Helps decouple order creation, payment processing, and notifications.
+2. **Spring Boot App**: The main application server (`server/`) exposing REST endpoints. On the `/purchase` hot checkout path, it executes completely statelessly relative to PostgreSQL (verifying and reserving stock in Redis and publishing events directly to Kafka). It also runs async background workers and schedules.
+3. **PostgreSQL**: The primary database for persistent data (Users, Products, Inventory, Orders, Payments, Idempotency keys, Outbox Events). It serves as the eventual source of truth.
+4. **Redis**: In-memory data store for handling high-concurrency tasks, such as user rate limiting, idempotency caches, and pre-deducting stock/reservations using Lua scripts to prevent DB overload.
+5. **Kafka**: Distributed event broker acting as the buffer for asynchronous fulfillment. Checkout events are processed asynchronously by workers to decouple client threads from database writes and external APIs.
 
 ## Architecture Diagram
 
 ```mermaid
 graph TD
     Client[React Frontend Client] -- "1. HTTP Request (JWT + Idempotency)" --> API[Spring Boot API]
-    API --> Redis[(Redis Cache)]
-    API --> DB[(PostgreSQL)]
-    API --> Kafka[Kafka Topics]
+    API -- "2. Check & Reserve" --> Redis[(Redis Cache)]
+    API -- "3. Publish (Direct)" --> Kafka[Kafka Topics]
     
     subgraph Data Layer
         Redis
-        DB
+        DB[(PostgreSQL)]
     end
     
     subgraph Event Driven Async Workers
-        Kafka --> OrderProcessor[Order Processing Worker]
-        Kafka --> PaymentProcessor[Payment Processing Worker]
+        Kafka -- "4. Consume (Fulfill Order)" --> OrderProcessor[Order Processing Worker]
+        OrderProcessor -- "5. Write Reservation/Order/Outbox" --> DB
+        OrderProcessor -- "6. Confirm Reservation Cache (Post-Commit)" --> Redis
+        
+        DB -- "7. Relay OutboxEvent" --> Kafka
+        
+        Kafka -- "8. Consume (Fulfill Payment)" --> PaymentProcessor[Payment Processing Worker]
+        PaymentProcessor -- "9. Update Order/Payment Status" --> DB
+        PaymentProcessor -- "10. Sync Complete State (Post-Commit)" --> Redis
     end
 ```
 ![alt text](Architecture_diagram_2.png)
@@ -36,11 +42,11 @@ graph TD
 * **User**: Customer credentials and role mapping (USER, ADMIN).
 * **Product**: Item details and state control (ACTIVE, INACTIVE, OUT_OF_STOCK).
 * **Inventory**: Stock tracking (Total, Available, Reserved) with pessimistic/optimistic JPA version checks.
-* **Reservation**: Temporary hold on stock during checkout (ACTIVE, CONFIRMED, EXPIRED, CANCELLED).
+* **Reservation**: Temporary hold on stock during checkout (ACTIVE in Redis/DB, CONFIRMED in Redis/DB, EXPIRED, CANCELLED).
 * **Order**: Finalized purchase record (CREATED, CONFIRMED, FAILED, CANCELLED).
 * **Payment**: Transaction status for the order (PENDING, SUCCESS, FAILED).
-* **Idempotency**: Tracking API requests to prevent duplicate processing (PROCESSING, COMPLETED, FAILED).
-* **OutboxEvent**: Events waiting to be published to Kafka (Transactional Outbox Pattern).
+* **Idempotency**: Tracking API requests to prevent duplicate processing (PROCESSING, ORDER_CREATED, COMPLETED, FAILED).
+* **OutboxEvent**: Events waiting to be published to Kafka (Transactional Outbox Pattern used by workers for reliable state propagation).
 
 ## Database Schema Migrations (Flyway)
 Database tables and schemas are managed incrementally via Flyway:

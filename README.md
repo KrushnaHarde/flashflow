@@ -59,10 +59,12 @@ flashflow/
 ## 🛡️ Core Concurrency & Resilience Patterns
 
 1. **Redis Fast-Path Stock Check (Lua Scripting):** Stock is decremented atomically inside Redis. Rejections for out-of-stock items happen instantly in memory, preventing database load.
-2. **Transactional Outbox Pattern:** Web threads write booking requests to an `outbox_events` table inside the PostgreSQL transaction. A background outbox relay publishes these to Kafka, ensuring at-least-once delivery without direct HTTP-to-Kafka write risks.
-3. **No Synchronous Database Hot-Row Locks:** The `/purchase` endpoint does not lock or decrement inventory rows in the DB. Instead, it registers an active reservation. Inventory is updated asynchronously by the Kafka consumer during order creation.
-4. **Idempotency & Rate Limiting:** Every checkout request requires a unique `idempotencyKey` and is guarded by a Redis token-bucket rate limiter.
-5. **Observed Performance Matrix:** A detailed analysis of expected throughput (up to 15,000 TPS) is documented in the [Performance Report](docs/PERFORMANCE_REPORT.md).
+2. **Direct Kafka Publishing on Hot Checkout Path:** To eliminate database bottlenecks, the `/purchase` API path bypasses PostgreSQL entirely. It performs all checks and stock reserves in Redis, then publishes the checkout request directly to Kafka.
+3. **Transactional Outbox Pattern Downstream:** The Outbox pattern is utilized during downstream asynchronous processing (e.g., in `OrderFulfillmentService` and `ReservationExpiryService`). When workers update the database, they insert an `OutboxEvent` in the same transaction to guarantee reliable propagation of subsequent states (e.g. `ORDER_CREATED` or `RESERVATION_EXPIRED`) to other microservices/topics.
+4. **Reconciliation & Orphan Sweepers:** Checkout reliability is guaranteed by a background `ReservationReconciliationScheduler` that matches transient Redis reservations with PostgreSQL. If a reservation is orphaned due to Kafka publish delays or server crashes, it is automatically republished or safely expired.
+5. **Idempotency & Rate Limiting:** Every checkout request requires a unique `idempotencyKey` and is guarded by a Redis token-bucket rate limiter.
+6. **Observed Performance Matrix:** A detailed analysis of expected throughput (up to 15,000 TPS) is documented in the [Performance Report](docs/PERFORMANCE_REPORT.md).
+
 
 ---
 
