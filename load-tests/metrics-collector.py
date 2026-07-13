@@ -43,43 +43,56 @@ def scrape_metric(name):
     return None
 
 def get_kafka_lag():
+    # 1. Try remote Kafka lag endpoint
     try:
-        result = subprocess.run(
-            ["docker", "exec", "flashflow-kafka", "kafka-consumer-groups", "--bootstrap-server", "localhost:9092", "--list"],
-            capture_output=True, text=True, timeout=2.0
-        )
-        if result.returncode == 0:
-            groups = result.stdout.strip().splitlines()
-            group_name = "flashflow-group"
-            for g in groups:
-                if "flashflow-group" in g:
-                    group_name = g.strip()
-                    break
-            
-            lag_result = subprocess.run(
-                ["docker", "exec", "flashflow-kafka", "kafka-consumer-groups", "--bootstrap-server", "localhost:9092", "--describe", "--group", group_name],
-                capture_output=True, text=True, timeout=2.0
-            )
-            if lag_result.returncode == 0:
-                max_lag = 0
-                found_group = False
-                for line in lag_result.stdout.strip().splitlines():
-                    if group_name in line:
-                        found_group = True
-                        parts = line.split()
-                        if len(parts) >= 6:
-                            try:
-                                lag_val = int(parts[5])
-                                if lag_val > max_lag:
-                                    max_lag = lag_val
-                            except ValueError:
-                                pass
-                if found_group:
-                    return max_lag
+        url = f"{base_url}/api/v1/metrics/kafka-lag"
+        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=1.0) as response:
+            data = json.loads(response.read().decode())
+            if 'maxLag' in data:
+                return data['maxLag']
     except Exception:
         pass
+
+    # 2. Try local Docker fallback if target is localhost
+    if "localhost" in base_url or "127.0.0.1" in base_url:
+        try:
+            result = subprocess.run(
+                ["docker", "exec", "flashflow-kafka", "kafka-consumer-groups", "--bootstrap-server", "localhost:9092", "--list"],
+                capture_output=True, text=True, timeout=2.0
+            )
+            if result.returncode == 0:
+                groups = result.stdout.strip().splitlines()
+                group_name = "flashflow-group"
+                for g in groups:
+                    if "flashflow-group" in g:
+                        group_name = g.strip()
+                        break
+                
+                lag_result = subprocess.run(
+                    ["docker", "exec", "flashflow-kafka", "kafka-consumer-groups", "--bootstrap-server", "localhost:9092", "--describe", "--group", group_name],
+                    capture_output=True, text=True, timeout=2.0
+                )
+                if lag_result.returncode == 0:
+                    max_lag = 0
+                    found_group = False
+                    for line in lag_result.stdout.strip().splitlines():
+                        if group_name in line:
+                            found_group = True
+                            parts = line.split()
+                            if len(parts) >= 6:
+                                try:
+                                    lag_val = int(parts[5])
+                                    if lag_val > max_lag:
+                                        max_lag = lag_val
+                                except ValueError:
+                                    pass
+                    if found_group:
+                        return max_lag
+        except Exception:
+            pass
     
-    # Fallback to Actuator
+    # 3. Fallback to Actuator
     return scrape_metric("kafka.consumer.fetch.manager.records.lag.max")
 
 try:
