@@ -85,9 +85,9 @@ function collectEnvironment(isShortRun) {
 /**
  * 2. Process metrics & correlate by stage
  */
-function processMetrics(k6Summary, systemMetrics) {
+function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason) {
   const metrics = k6Summary.metrics || {};
-  const isShortRun = (k6Summary.state && k6Summary.state.testRunDurationMs < 300000); // under 5 min
+  const isShortRun = (k6Summary.state && k6Summary.state.testRunDurationMs < 300000) || (process.env.SHORT_RUN === 'true');
   
   // Stage duration configurations
   const shortRunDurations = {
@@ -108,6 +108,17 @@ function processMetrics(k6Summary, systemMetrics) {
 
   const stagesList = Object.keys(durations);
   
+  let lastActiveIndex = -1;
+  stagesList.forEach((stageName, index) => {
+    const failedMetric = metrics[`http_req_failed{stage:${stageName}}`] || {};
+    const passes = failedMetric.values ? (failedMetric.values.passes || 0) : 0;
+    const fails = failedMetric.values ? (failedMetric.values.fails || 0) : 0;
+    const totalRequests = passes + fails;
+    if (totalRequests > 0) {
+      lastActiveIndex = index;
+    }
+  });
+
   // Parse system metrics timestamps
   let startTime = Date.now();
   if (systemMetrics.length > 0) {
@@ -214,50 +225,70 @@ function processMetrics(k6Summary, systemMetrics) {
       scrapeFailed = true;
     }
 
-    if (scrapeFailed) {
-      slaStatus = 'INVALID';
-      bottleneckCause = 'Metrics Scraping Failed (Server Unresponsive / Connection Timeout)';
-      bottleneckEvidence = `Actual RPS dropped to ${actualRps.toFixed(1)} (previous stage: ${prevStage.actualRps.toFixed(1)}) while measured system CPU read N/A (metrics query timeout).`;
-      bottleneckRec = 'Spring Boot Tomcat threads or connection pool sat in BLOCKED state, failing to service Actuator metrics polls under high load. Increase resources or tune configurations.';
-    } else if (slaStatus === 'FAIL' || p95Latency > 200) {
-      const expectedRequests = targetRps * duration;
-      const droppedForStage = Math.max(0, expectedRequests - totalRequests);
-      const hasDroppedIterations = droppedIterationsCount > 0 && (droppedForStage > (expectedRequests * 0.05));
+    // Check if aborted
+    let isAborted = false;
+    if (isKilled && index > lastActiveIndex) {
+      isAborted = true;
+    }
 
-      // Check if k6 dropped iterations (client rig limitation)
-      if (targetRps >= 1000 && hasDroppedIterations) {
-        slaStatus = 'INCONCLUSIVE';
-        bottleneckCause = 'Inconclusive (Client Load Generator Exhaustion)';
-        bottleneckEvidence = `k6 dropped ${droppedForStage.toLocaleString()} load-testing iterations for this stage due to client machine socket/CPU exhaustion.`;
-        bottleneckRec = 'Move the k6 test runner execution to a separate machine on the network, or configure distributed load generation nodes.';
-      } else if (maxHikariPending !== null && maxHikariPending > 0 || (maxHikariLimit > 0 && avgHikariActive !== null && avgHikariActive >= (maxHikariLimit * 0.85))) {
-        bottleneckCause = 'REGRESSION VIOLATION: Database Connection Pool Saturation';
-        bottleneckEvidence = `Hikari active connections reached ${(avgHikariActive || 0).toFixed(1)}/${maxHikariLimit.toFixed(0)}. Active threads waiting: ${maxHikariPending || 0}.`;
-        bottleneckRec = 'PostgreSQL database pool saturation detected! Since the HTTP hot path is now decoupled from Postgres, this indicates a serious regression (e.g. database operations or blocking calls are accidentally being executed on the synchronous HTTP request path). Audit controllers and services for accidental DB queries.';
-      } else if ((maxKafkaLag !== null && maxKafkaLag > 50) || expiredCount > 0) {
-        bottleneckCause = 'Worker/Kafka Consumer Throughput Bottleneck';
-        bottleneckEvidence = `Kafka consumer lag reached ${maxKafkaLag || 0} records and ${expiredCount} reservations expired before they could be confirmed.`;
-        bottleneckRec = 'Scale the async worker tier: increase Kafka partition count on flashflow.orders & flashflow.payments, scale worker consumer threads or run multiple worker instances. Keep HikariCP maximum-pool-size at 10 to avoid database scheduling thrashing.';
-      } else if (maxRedisLatency !== null && maxRedisLatency > 0.05 && slaStatus === 'FAIL') {
-        bottleneckCause = 'Redis Command Completion Delay';
-        bottleneckEvidence = `Redis lettuce max response latency hit ${(maxRedisLatency * 1000).toFixed(1)}ms.`;
-        bottleneckRec = 'Batch Redis operations using MGET/MSET pipelines or bundle commands in a single transactional Lua script.';
-      } else if (maxCpu !== null && maxCpu > 0.85) {
-        bottleneckCause = 'CPU Core Exhaustion';
-        bottleneckEvidence = `System CPU load reached ${(maxCpu * 100).toFixed(1)}%.`;
-        bottleneckRec = 'Allocate more CPU cores to the hosting node or profile JVM GC throughput options.';
-      } else if (errorRate > 0.5) {
-        bottleneckCause = 'Tomcat Connector Backlog/OS Port Exhaustion';
-        bottleneckEvidence = `Error rate reached ${(errorRate * 100).toFixed(1)}% due to connection refusals.`;
-        bottleneckRec = 'Increase server.tomcat.threads.max or apply OS registry overrides to increase TCP max ports.';
-      } else {
-        bottleneckCause = 'Database Lock Contention / Async Overhead';
-        bottleneckEvidence = `Thread saturation observed (live JVM threads: high).`;
-        bottleneckRec = 'Optimize catalog table indexes and execute writes asynchronously behind the Kafka messaging bus.';
+    if (isAborted) {
+      slaStatus = 'ABORTED';
+      bottleneckCause = 'Load Generator Termination';
+      bottleneckEvidence = `Stage not run | ${terminationReason || 'Process terminated'}`;
+      bottleneckRec = 'Check load generator memory headroom or VU ceilings; run with --max-vus-override capped to lower limits.';
+    } else {
+      if (scrapeFailed) {
+        slaStatus = 'INVALID';
+        bottleneckCause = 'Metrics Scraping Failed (Server Unresponsive / Connection Timeout)';
+        bottleneckEvidence = `Actual RPS dropped to ${actualRps.toFixed(1)} (previous stage: ${prevStage.actualRps.toFixed(1)}) while measured system CPU read N/A (metrics query timeout).`;
+        bottleneckRec = 'Spring Boot Tomcat threads or connection pool sat in BLOCKED state, failing to service Actuator metrics polls under high load. Increase resources or tune configurations.';
+      } else if (slaStatus === 'FAIL' || p95Latency > 200) {
+        const expectedRequests = targetRps * duration;
+        const droppedForStage = Math.max(0, expectedRequests - totalRequests);
+        const hasDroppedIterations = droppedIterationsCount > 0 && (droppedForStage > (expectedRequests * 0.05));
+
+        // Check if k6 dropped iterations (client rig limitation)
+        if (targetRps >= 1000 && hasDroppedIterations) {
+          slaStatus = 'INCONCLUSIVE';
+          bottleneckCause = 'Inconclusive (Client Load Generator Exhaustion)';
+          bottleneckEvidence = `k6 dropped ${droppedForStage.toLocaleString()} load-testing iterations for this stage due to client machine socket/CPU exhaustion.`;
+          bottleneckRec = 'Move the k6 test runner execution to a separate machine on the network, or configure distributed load generation nodes.';
+        } else if (maxHikariPending !== null && maxHikariPending > 0 || (maxHikariLimit > 0 && avgHikariActive !== null && avgHikariActive >= (maxHikariLimit * 0.85))) {
+          bottleneckCause = 'REGRESSION VIOLATION: Database Connection Pool Saturation';
+          bottleneckEvidence = `Hikari active connections reached ${(avgHikariActive || 0).toFixed(1)}/${maxHikariLimit.toFixed(0)}. Active threads waiting: ${maxHikariPending || 0}.`;
+          bottleneckRec = 'PostgreSQL database pool saturation detected! Since the HTTP hot path is now decoupled from Postgres, this indicates a serious regression (e.g. database operations or blocking calls are accidentally being executed on the synchronous HTTP request path). Audit controllers and services for accidental DB queries.';
+        } else if ((maxKafkaLag !== null && maxKafkaLag > 50) || expiredCount > 0) {
+          bottleneckCause = 'Worker/Kafka Consumer Throughput Bottleneck';
+          bottleneckEvidence = `Kafka consumer lag reached ${maxKafkaLag || 0} records and ${expiredCount} reservations expired before they could be confirmed.`;
+          bottleneckRec = 'Scale the async worker tier: increase Kafka partition count on flashflow.orders & flashflow.payments, scale worker consumer threads or run multiple worker instances. Keep HikariCP maximum-pool-size at 10 to avoid database scheduling thrashing.';
+        } else if (maxRedisLatency !== null && maxRedisLatency > 0.05 && slaStatus === 'FAIL') {
+          bottleneckCause = 'Redis Command Completion Delay';
+          bottleneckEvidence = `Redis lettuce max response latency hit ${(maxRedisLatency * 1000).toFixed(1)}ms.`;
+          bottleneckRec = 'Batch Redis operations using MGET/MSET pipelines or bundle commands in a single transactional Lua script.';
+        } else if (maxCpu !== null && maxCpu > 0.85) {
+          bottleneckCause = 'CPU Core Exhaustion';
+          bottleneckEvidence = `System CPU load reached ${(maxCpu * 100).toFixed(1)}%.`;
+          bottleneckRec = 'Allocate more CPU cores to the hosting node or profile JVM GC throughput options.';
+        } else if (errorRate > 0.5) {
+          bottleneckCause = 'Tomcat Connector Backlog/OS Port Exhaustion';
+          bottleneckEvidence = `Error rate reached ${(errorRate * 100).toFixed(1)}% due to connection refusals.`;
+          bottleneckRec = 'Increase server.tomcat.threads.max or apply OS registry overrides to increase TCP max ports.';
+        } else {
+          bottleneckCause = 'Database Lock Contention / Async Overhead';
+          bottleneckEvidence = `Thread saturation observed (live JVM threads: high).`;
+          bottleneckRec = 'Optimize catalog table indexes and execute writes asynchronously behind the Kafka messaging bus.';
+        }
       }
     }
 
     bottleneckEvidence = (bottleneckEvidence === 'N/A') ? `CPU Trend: ${cpuTrend}` : `${bottleneckEvidence} | CPU Trend: ${cpuTrend}`;
+
+    let vus = vuAllocationMap[stageName];
+    const scenarioName = `stage_${stageName}`;
+    if (k6Summary.options && k6Summary.options.scenarios && k6Summary.options.scenarios[scenarioName]) {
+      const scen = k6Summary.options.scenarios[scenarioName];
+      vus = scen.maxVUs || scen.vus || vus;
+    }
 
     processedStages.push({
       stageName,
@@ -272,16 +303,16 @@ function processMetrics(k6Summary, systemMetrics) {
       reconFailedCount,
       idempotencyMismatch,
       optimisticLockRetry,
-      droppedIterations,
+      droppedIterations: Math.max(0, (targetRps * duration) - totalRequests),
       avgLatency,
       p95Latency,
       p99Latency,
       errorRate,
-      vus: vuAllocationMap[stageName],
+      vus,
       slaStatus,
       violations: {
-        p95: p95Violated,
-        p99: p99Violated,
+        p95: p95Latency > 500,
+        p99: p99Latency > 1000,
         error: errorViolated
       },
       system: {
@@ -308,14 +339,17 @@ function processMetrics(k6Summary, systemMetrics) {
  * 3. Calculate Knee-Point (breaking point)
  */
 function findKneePoint(stages) {
-  // Knee-point is where p95 latency starts increasing rapidly
-  // We can calculate the rate of change of P95 latency relative to Target RPS
+  const activeStages = stages.filter(s => s.requestCount > 0);
+  if (!activeStages.length) {
+    return { stageName: 'N/A', targetRps: 0, bottleneck: { cause: 'N/A' } };
+  }
+
   let maxSlope = -1;
   let kneeIndex = 0;
 
-  for (let i = 1; i < stages.length; i++) {
-    const prev = stages[i-1];
-    const curr = stages[i];
+  for (let i = 1; i < activeStages.length; i++) {
+    const prev = activeStages[i-1];
+    const curr = activeStages[i];
     const rpsDiff = curr.targetRps - prev.targetRps;
     if (rpsDiff === 0) continue;
     const slope = (curr.p95Latency - prev.p95Latency) / rpsDiff;
@@ -327,13 +361,12 @@ function findKneePoint(stages) {
     }
   }
 
-  // If no massive spike, return first stage that failed SLA, or default to last stage
-  if (kneeIndex === 0) {
-    const firstFail = stages.find(s => s.slaStatus === 'FAIL');
-    return firstFail ? firstFail : stages[stages.length - 1];
+  // If no massive spike, return first stage that failed SLA, or default to last active stage
+  const failedStage = activeStages.find(s => s.slaStatus === 'FAIL');
+  if (failedStage && maxSlope === -1) {
+    return failedStage;
   }
-
-  return stages[kneeIndex];
+  return activeStages[kneeIndex];
 }
 
 /**
@@ -612,12 +645,15 @@ function drawSvgChart(title, labels, values, type = 'line', threshold = null) {
 /**
  * 8. Exports Generator: Markdown
  */
-function generateMarkdownReport(env, stages, score, kneePoint, recs) {
+function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason) {
   const totalRateLimitBlocks = stages.reduce((sum, s) => sum + s.rateLimitCount, 0);
   const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
   const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
 
   let md = `# Executive Performance Report: FlashFlow Stress Capacity\n\n`;
+  if (isKilled) {
+    md += `> [!CAUTION]\n> **This run did not complete all stages; results below reflect only stages that finished before termination.**\n> (Reason: ${terminationReason || 'Unknown'})\n\n`;
+  }
   md += `## Executive Summary\n\n`;
   md += `- **Maximum Sustained Throughput**: ${Math.round(stages.filter(s => s.slaStatus === 'PASS').reduce((max, s) => Math.max(max, s.actualRps), 0))} RPS\n`;
   md += `- **Maximum Sustained Concurrent Users**: ${Math.max(...stages.filter(s => s.slaStatus === 'PASS').map(s => s.vus))} VUs\n`;
@@ -686,7 +722,7 @@ function generateCsvReport(stages) {
 /**
  * 10. Exports Generator: HTML dashboard
  */
-function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
+function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason) {
   const totalRateLimitBlocks = stages.reduce((sum, s) => sum + s.rateLimitCount, 0);
   const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
   const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
@@ -922,6 +958,12 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
       <div class="timestamp">Test Run Executed on: ${new Date().toLocaleString()}</div>
     </header>
 
+    ${isKilled ? `
+      <div style="background: rgba(229, 62, 62, 0.15); border: 1px solid rgba(229, 62, 62, 0.3); border-radius: 12px; padding: 15px; margin-bottom: 20px; color: #f56565; font-weight: bold; font-size: 1rem;">
+        🛑 This run did not complete all stages; results below reflect only stages that finished before termination. (Reason: ${terminationReason || 'Unknown'})
+      </div>
+    ` : ''}
+
     ${env.execution.includes('Local') ? `
       <div style="background: rgba(217, 119, 6, 0.15); border: 1px solid rgba(217, 119, 6, 0.3); border-radius: 12px; padding: 15px; margin-bottom: 20px; color: #ecc94b; font-size: 0.9rem;">
         ⚠️ <strong>Local Testing Execution Mode:</strong> Both the k6 load generator and Spring Boot API server ran on the same host machine. High-load throughput tiers (5,000+ RPS) are limited by client CPU resource division and loopback port/backlog bounds.
@@ -1083,13 +1125,46 @@ function readJsonFile(filePath) {
 function main() {
   console.log('[Reporter] Loading run metrics files...');
 
-  if (!fs.existsSync(K6_SUMMARY_FILE)) {
-    console.error(`Error: Could not locate k6 summary file: ${K6_SUMMARY_FILE}`);
-    process.exit(1);
+  const K6_EXIT_CODE = process.env.K6_EXIT_CODE ? parseInt(process.env.K6_EXIT_CODE, 10) : 0;
+  let isKilled = K6_EXIT_CODE !== 0;
+  let terminationReason = "";
+
+  const k6LogPath = path.join(__dirname, 'k6_run.log');
+  if (fs.existsSync(k6LogPath)) {
+    const logContent = fs.readFileSync(k6LogPath, 'utf8');
+    if (/oom|killed|exit status 137|out of memory/i.test(logContent)) {
+      isKilled = true;
+      terminationReason = "OOM killed";
+    } else if (/panic/i.test(logContent)) {
+      isKilled = true;
+      terminationReason = "k6 Panic";
+    } else if (/connection refused/i.test(logContent)) {
+      isKilled = true;
+      terminationReason = "Connection Refused";
+    } else if (K6_EXIT_CODE !== 0) {
+      isKilled = true;
+      terminationReason = "Process terminated unexpectedly";
+    }
+  } else if (K6_EXIT_CODE !== 0) {
+    isKilled = true;
+    terminationReason = "Process exited with code " + K6_EXIT_CODE;
   }
 
-  const k6Summary = readJsonFile(K6_SUMMARY_FILE);
-  const isShortRun = (k6Summary.state && k6Summary.state.testRunDurationMs < 300000); // under 5 min
+  let k6Summary = { metrics: {}, state: { testRunDurationMs: 0 } };
+  if (fs.existsSync(K6_SUMMARY_FILE)) {
+    try {
+      k6Summary = readJsonFile(K6_SUMMARY_FILE);
+    } catch (e) {
+      console.warn(`[Reporter] Warning: Failed to parse k6 summary, using empty fallback.`);
+    }
+  } else {
+    console.warn(`[Reporter] Warning: k6 summary file not found, using empty fallback.`);
+    if (isKilled && !terminationReason) {
+      terminationReason = "Process terminated before writing summary";
+    }
+  }
+
+  const isShortRun = (k6Summary.state && k6Summary.state.testRunDurationMs < 300000) || (process.env.SHORT_RUN === 'true');
   
   let systemMetrics = [];
   if (fs.existsSync(SYSTEM_METRICS_FILE)) {
@@ -1103,7 +1178,7 @@ function main() {
   const env = collectEnvironment(isShortRun);
 
   // 2. Correlate metrics and categorize stages
-  const stages = processMetrics(k6Summary, systemMetrics);
+  const stages = processMetrics(k6Summary, systemMetrics, isKilled, terminationReason);
 
   // 3. Find knee/breaking point
   const kneePoint = findKneePoint(stages);
@@ -1152,7 +1227,7 @@ function main() {
   fs.writeFileSync(path.join(HISTORY_DIR, `run_${timestamp}.json`), JSON.stringify(runRecord, null, 2), 'utf8');
 
   // HTML Dashboard
-  const htmlContent = generateHtmlReport(env, stages, score, kneePoint, recs, historyComp);
+  const htmlContent = generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason);
   fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.html`), htmlContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.html`), htmlContent, 'utf8');
 
@@ -1161,7 +1236,7 @@ function main() {
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.json`), JSON.stringify(runRecord, null, 2), 'utf8');
 
   // Markdown summary
-  const mdContent = generateMarkdownReport(env, stages, score, kneePoint, recs);
+  const mdContent = generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason);
   fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.md`), mdContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.md`), mdContent, 'utf8');
 
