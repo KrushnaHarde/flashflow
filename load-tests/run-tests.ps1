@@ -8,7 +8,9 @@ param(
 
     [switch]$ShortRun,
 
-    [switch]$OpenReport
+    [switch]$OpenReport,
+
+    [int]$MaxVusOverride = 0
 )
 
 # 1. Verify k6 installation
@@ -88,13 +90,16 @@ $metricsPath = "load-tests/system_metrics.json"
 if (Test-Path $metricsPath) { Remove-Item $metricsPath -Force }
 
 Write-Host "Starting background performance metrics collection..." -ForegroundColor Gray
-$collectorProcess = Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File load-tests/metrics-collector.ps1 -OutputPath $metricsPath" -NoNewWindow -PassThru
+$collectorProcess = Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File load-tests/metrics-collector.ps1 -OutputPath $metricsPath -BaseUrl $BaseUrl" -NoNewWindow -PassThru
 
 # 5. Run the k6 command
 $k6Args = @("run")
 $k6Args += @("--env", "BASE_URL=$BaseUrl")
 if ($ShortRun) {
     $k6Args += @("--env", "SHORT_RUN=true")
+}
+if ($MaxVusOverride -gt 0) {
+    $k6Args += @("--env", "MAX_VUS_OVERRIDE=$MaxVusOverride")
 }
 $k6Args += $ScriptFile
 
