@@ -53,4 +53,6 @@ load-tests/history/
 load-tests/reports/
 load-tests/sweep/
 sweep_report.md
+load-tests/k6_summary.json
+
 
