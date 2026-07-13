@@ -74,6 +74,42 @@ services:
       kafka:
         condition: service_started
 
+  redis-master:
+    image: redis:7-alpine
+    container_name: flashflow-redis-master
+    command: redis-server --port 6379
+    ports:
+      - "6380:6379"
+    profiles:
+      - sentinel
+
+  redis-slave:
+    image: redis:7-alpine
+    container_name: flashflow-redis-slave
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      - redis-master
+    profiles:
+      - sentinel
+
+  redis-sentinel:
+    image: redis:7-alpine
+    container_name: flashflow-redis-sentinel
+    command: >
+      sh -c "echo 'port 26379' > /sentinel.conf &&
+             echo 'sentinel monitor mymaster redis-master 6379 2' >> /sentinel.conf &&
+             echo 'sentinel down-after-milliseconds mymaster 5000' >> /sentinel.conf &&
+             echo 'sentinel failover-timeout mymaster 10000' >> /sentinel.conf &&
+             echo 'sentinel parallel-syncs mymaster 1' >> /sentinel.conf &&
+             redis-server /sentinel.conf --sentinel"
+    ports:
+      - "26379:26379"
+    depends_on:
+      - redis-master
+      - redis-slave
+    profiles:
+      - sentinel
+
 volumes:
   postgres_data:
   redis_data:
