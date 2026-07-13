@@ -80,7 +80,14 @@ while (-not (Test-Path $flagPath)) {
     # 7. Kafka Consumer Lag Maximum
     $kafkaLag = $null
     try {
-        $lagOutput = docker exec flashflow-kafka kafka-consumer-groups --bootstrap-server localhost:9092 --describe --group flashflow-group 2>$null
+        $groupName = "flashflow-group"
+        try {
+            $activeGroups = docker exec flashflow-kafka kafka-consumer-groups --bootstrap-server localhost:9092 --list 2>$null
+            $matchedGroup = $activeGroups | Where-Object { $_ -match "flashflow-group" } | Select-Object -First 1
+            if ($matchedGroup) { $groupName = $matchedGroup.Trim() }
+        } catch {}
+
+        $lagOutput = docker exec flashflow-kafka kafka-consumer-groups --bootstrap-server localhost:9092 --describe --group $groupName 2>$null
         if ($lagOutput) {
             $maxLagVal = 0
             $foundGroup = $false
@@ -134,6 +141,34 @@ while (-not (Test-Path $flagPath)) {
         $ordersConfirmed = 0
     }
 
+    # 7.7 Reconciled Count
+    $reservationsReconciled = 0
+    try {
+        $res = Invoke-RestMethod -Uri "http://localhost:8080/actuator/metrics/reservations.reconciled.count" -TimeoutSec 1
+        if ($res.measurements) { $reservationsReconciled = $res.measurements[0].value }
+    } catch {}
+
+    # 7.8 Reconciliation Failed Count
+    $reservationsReconFailed = 0
+    try {
+        $res = Invoke-RestMethod -Uri "http://localhost:8080/actuator/metrics/reservations.reconciliation.failed.count" -TimeoutSec 1
+        if ($res.measurements) { $reservationsReconFailed = $res.measurements[0].value }
+    } catch {}
+
+    # 7.9 Idempotency Mismatch Count
+    $idempotencyMismatch = 0
+    try {
+        $res = Invoke-RestMethod -Uri "http://localhost:8080/actuator/metrics/idempotency.mismatch.count" -TimeoutSec 1
+        if ($res.measurements) { $idempotencyMismatch = $res.measurements[0].value }
+    } catch {}
+
+    # 7.10 Optimistic Lock Retry Count
+    $optimisticLockRetry = 0
+    try {
+        $res = Invoke-RestMethod -Uri "http://localhost:8080/actuator/metrics/optimistic.lock.retry.count" -TimeoutSec 1
+        if ($res.measurements) { $optimisticLockRetry = $res.measurements[0].value }
+    } catch {}
+
     # 8. Redis/Lettuce command completion latency (seconds)
     $redisLatency = $null
     try {
@@ -147,18 +182,22 @@ while (-not (Test-Path $flagPath)) {
     }
 
     $record = [PSCustomObject]@{
-        timestamp             = $timestamp
-        system_cpu            = $systemCpu
-        process_cpu           = $processCpu
-        jvm_memory_used       = $jvmMemoryUsed
-        jvm_threads_live      = $jvmThreads
-        hikari_active         = $hikariActive
-        hikari_max            = $hikariMax
-        hikari_pending        = $hikariPending
-        kafka_lag_max         = $kafkaLag
-        reservations_expired  = $reservationsExpired
-        orders_confirmed      = $ordersConfirmed
-        redis_latency_max     = $redisLatency
+        timestamp                 = $timestamp
+        system_cpu                = $systemCpu
+        process_cpu               = $processCpu
+        jvm_memory_used           = $jvmMemoryUsed
+        jvm_threads_live          = $jvmThreads
+        hikari_active             = $hikariActive
+        hikari_max                = $hikariMax
+        hikari_pending            = $hikariPending
+        kafka_lag_max             = $kafkaLag
+        reservations_expired      = $reservationsExpired
+        orders_confirmed          = $ordersConfirmed
+        redis_latency_max         = $redisLatency
+        reservations_reconciled   = $reservationsReconciled
+        reservations_recon_failed = $reservationsReconFailed
+        idempotency_mismatch      = $idempotencyMismatch
+        optimistic_lock_retry     = $optimisticLockRetry
     }
 
     $metrics.Add($record)

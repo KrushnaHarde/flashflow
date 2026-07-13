@@ -70,6 +70,19 @@ try {
     "[]" | Out-File -FilePath "load-tests/users_pool.json" -Encoding utf8
 }
 
+# Purge historical messages from Kafka topics to start with fresh zero lag
+Write-Host "Purging historical messages from Kafka topics..." -ForegroundColor Gray
+try {
+    docker exec flashflow-kafka kafka-configs --bootstrap-server localhost:9092 --entity-type topics --entity-name flashflow.orders --alter --add-config retention.ms=1 2>$null | Out-Null
+    docker exec flashflow-kafka kafka-configs --bootstrap-server localhost:9092 --entity-type topics --entity-name flashflow.payments --alter --add-config retention.ms=1 2>$null | Out-Null
+    Start-Sleep -Seconds 2
+    docker exec flashflow-kafka kafka-configs --bootstrap-server localhost:9092 --entity-type topics --entity-name flashflow.orders --alter --delete-config retention.ms 2>$null | Out-Null
+    docker exec flashflow-kafka kafka-configs --bootstrap-server localhost:9092 --entity-type topics --entity-name flashflow.payments --alter --delete-config retention.ms 2>$null | Out-Null
+    Write-Host "Kafka topics successfully purged." -ForegroundColor Green
+} catch {
+    Write-Warning "Failed to purge Kafka topics: $_"
+}
+
 # 4. Launch background metrics collector
 $metricsPath = "load-tests/system_metrics.json"
 if (Test-Path $metricsPath) { Remove-Item $metricsPath -Force }

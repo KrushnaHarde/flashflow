@@ -164,6 +164,13 @@ function processMetrics(k6Summary, systemMetrics) {
     const confirmedCount = getCounterDelta(stageSysMetrics, 'orders_confirmed');
     const workerConfirmRate = duration > 0 ? (confirmedCount / duration) : 0;
 
+    const reconciledCount = getCounterDelta(stageSysMetrics, 'reservations_reconciled');
+    const reconFailedCount = getCounterDelta(stageSysMetrics, 'reservations_recon_failed');
+    const idempotencyMismatch = getCounterDelta(stageSysMetrics, 'idempotency_mismatch');
+    const optimisticLockRetry = getCounterDelta(stageSysMetrics, 'optimistic_lock_retry');
+
+    const cpuTrend = stageSysMetrics.map(m => m.system_cpu !== null ? `${(m.system_cpu * 100).toFixed(0)}%` : 'N/A').join(' -> ');
+
     // Extract k6 latency & throughput details
     const failedMetric = metrics[`http_req_failed{stage:${stageName}}`] || {};
     const durationMetric = metrics[`http_req_duration{stage:${stageName}}`] || {};
@@ -173,6 +180,9 @@ function processMetrics(k6Summary, systemMetrics) {
     const fails = failedMetric.values ? (failedMetric.values.fails || 0) : 0;   // successful requests
     const totalRequests = passes + fails;
     const rateLimitCount = rateLimitMetric.values ? (rateLimitMetric.values.count || 0) : 0;
+    
+    const expectedRequests = targetRps * duration;
+    const droppedIterations = Math.max(0, expectedRequests - totalRequests);
     
     const actualRps = totalRequests / duration;
     const errorRate = totalRequests > 0 ? (passes / totalRequests) : 0;
@@ -247,6 +257,8 @@ function processMetrics(k6Summary, systemMetrics) {
       }
     }
 
+    bottleneckEvidence = (bottleneckEvidence === 'N/A') ? `CPU Trend: ${cpuTrend}` : `${bottleneckEvidence} | CPU Trend: ${cpuTrend}`;
+
     processedStages.push({
       stageName,
       targetRps,
@@ -256,6 +268,11 @@ function processMetrics(k6Summary, systemMetrics) {
       expiredCount,
       confirmedCount,
       workerConfirmRate,
+      reconciledCount,
+      reconFailedCount,
+      idempotencyMismatch,
+      optimisticLockRetry,
+      droppedIterations,
       avgLatency,
       p95Latency,
       p99Latency,
@@ -624,15 +641,15 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs) {
   md += `\n`;
 
   md += `## Staged Metrics & Performance Matrix\n\n`;
-  md += `| Stage | Target RPS | Actual RPS | Req Count | p95 Latency | p99 Latency | Error Rate | CPU Max | Hikari Active | Max Kafka Lag | Expired Reservations | Worker Confirm Rate | SLA Status |\n`;
-  md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
+  md += `| Stage | Target RPS | Actual RPS | Req Count | p95 Latency | p99 Latency | Error Rate | CPU Max | Hikari Active | Max Kafka Lag | Expired Reservations | Worker Confirm Rate | Reconciled | Recon Failed | Idemp Mismatch | Opt Lock Retries | Dropped Iters | SLA Status |\n`;
+  md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
   stages.forEach(s => {
     const cpuStr = s.system.cpuMax !== null ? `${(s.system.cpuMax * 100).toFixed(0)}%` : 'SCRAPE_FAILED';
     const hikariStr = s.system.hikariActive !== null ? s.system.hikariActive.toFixed(1) : 'SCRAPE_FAILED';
     const kafkaLagStr = s.system.kafkaLag !== null ? s.system.kafkaLag.toString() : 'SCRAPE_FAILED';
     const expiredStr = s.expiredCount.toString();
     const workerRateStr = s.workerConfirmRate.toFixed(1);
-    md += `| **${s.stageName}** | ${s.targetRps} | ${s.actualRps.toFixed(1)} | ${s.requestCount} | ${s.p95Latency.toFixed(1)} ms | ${s.p99Latency.toFixed(1)} ms | ${(s.errorRate * 100).toFixed(2)}% | ${cpuStr} | ${hikariStr} | ${kafkaLagStr} | ${expiredStr} | ${workerRateStr} / s | ${s.slaStatus} |\n`;
+    md += `| **${s.stageName}** | ${s.targetRps} | ${s.actualRps.toFixed(1)} | ${s.requestCount} | ${s.p95Latency.toFixed(1)} ms | ${s.p99Latency.toFixed(1)} ms | ${(s.errorRate * 100).toFixed(2)}% | ${cpuStr} | ${hikariStr} | ${kafkaLagStr} | ${expiredStr} | ${workerRateStr} / s | ${s.reconciledCount} | ${s.reconFailedCount} | ${s.idempotencyMismatch} | ${s.optimisticLockRetry} | ${s.droppedIterations} | ${s.slaStatus} |\n`;
   });
   md += `\n`;
 
@@ -656,12 +673,12 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs) {
  * 9. Exports Generator: CSV
  */
 function generateCsvReport(stages) {
-  let csv = `StageName,TargetRps,ActualRps,ReqCount,AvgLatencyMs,p95LatencyMs,p99LatencyMs,ErrorRatePercent,CpuMaxPercent,HikariActiveAvg,KafkaLagMax,ReservationsExpired,WorkerConfirmRate,SlaStatus\n`;
+  let csv = `StageName,TargetRps,ActualRps,ReqCount,AvgLatencyMs,p95LatencyMs,p99LatencyMs,ErrorRatePercent,CpuMaxPercent,HikariActiveAvg,KafkaLagMax,ReservationsExpired,WorkerConfirmRate,ReconciledCount,ReconFailedCount,IdempotencyMismatchCount,OptimisticLockRetryCount,DroppedIterationsCount,SlaStatus\n`;
   stages.forEach(s => {
     const cpuVal = s.system.cpuMax !== null ? (s.system.cpuMax * 100).toFixed(2) : 'SCRAPE_FAILED';
     const hikariVal = s.system.hikariActive !== null ? s.system.hikariActive.toFixed(2) : 'SCRAPE_FAILED';
     const kafkaLagVal = s.system.kafkaLag !== null ? s.system.kafkaLag : -1;
-    csv += `${s.stageName},${s.targetRps},${s.actualRps.toFixed(2)},${s.requestCount},${s.avgLatency.toFixed(2)},${s.p95Latency.toFixed(2)},${s.p99Latency.toFixed(2)},${(s.errorRate * 100).toFixed(4)},${cpuVal},${hikariVal},${kafkaLagVal},${s.expiredCount},${s.workerConfirmRate.toFixed(2)},${s.slaStatus}\n`;
+    csv += `${s.stageName},${s.targetRps},${s.actualRps.toFixed(2)},${s.requestCount},${s.avgLatency.toFixed(2)},${s.p95Latency.toFixed(2)},${s.p99Latency.toFixed(2)},${(s.errorRate * 100).toFixed(4)},${cpuVal},${hikariVal},${kafkaLagVal},${s.expiredCount},${s.workerConfirmRate.toFixed(2)},${s.reconciledCount},${s.reconFailedCount},${s.idempotencyMismatch},${s.optimisticLockRetry},${s.droppedIterations},${s.slaStatus}\n`;
   });
   return csv;
 }
@@ -974,6 +991,11 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
             <th>Kafka Consumer Lag (max)</th>
             <th>Reservations Expired</th>
             <th>Worker Confirm Rate</th>
+            <th>Reconciled</th>
+            <th>Recon Failed</th>
+            <th>Idemp Mismatch</th>
+            <th>Opt Lock Retries</th>
+            <th>Dropped Iters</th>
             <th>SLA Status</th>
           </tr>
         </thead>
@@ -992,6 +1014,11 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp) {
               <td>${s.system.kafkaLag !== null ? s.system.kafkaLag : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
               <td>${s.expiredCount}</td>
               <td>${s.workerConfirmRate.toFixed(1)} / s</td>
+              <td>${s.reconciledCount}</td>
+              <td>${s.reconFailedCount}</td>
+              <td>${s.idempotencyMismatch}</td>
+              <td>${s.optimisticLockRetry}</td>
+              <td>${s.droppedIterations}</td>
               <td><span class="${s.slaStatus === 'PASS' ? 'status-pass' : (s.slaStatus === 'INCONCLUSIVE' ? 'status-inconclusive' : (s.slaStatus === 'INVALID' ? 'status-invalid' : 'status-fail'))}">${s.slaStatus}</span></td>
             </tr>
           `).join('')}
@@ -1066,7 +1093,8 @@ function main() {
   
   let systemMetrics = [];
   if (fs.existsSync(SYSTEM_METRICS_FILE)) {
-    systemMetrics = readJsonFile(SYSTEM_METRICS_FILE);
+    const parsedMetrics = readJsonFile(SYSTEM_METRICS_FILE);
+    systemMetrics = Array.isArray(parsedMetrics) ? parsedMetrics : [parsedMetrics];
   } else {
     console.warn(`[Reporter] Warning: Could not locate system metrics: ${SYSTEM_METRICS_FILE}`);
   }
