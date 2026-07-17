@@ -208,6 +208,16 @@ export function runRandomEndpoint(stageName, authData) {
   if (!ENDPOINTS || ENDPOINTS.length === 0) {
     throw new Error('No endpoints defined in config.js');
   }
+  
+  if (__ENV.CAPACITY_MODE === 'true') {
+    const purchaseEndpoint = ENDPOINTS.find(ep => ep.path === '/purchase');
+    if (!purchaseEndpoint) {
+      throw new Error('Purchase endpoint not found in config.js');
+    }
+    executeRequest(purchaseEndpoint, stageName, authData);
+    return;
+  }
+
   const index = Math.floor(Math.random() * ENDPOINTS.length);
   const endpoint = ENDPOINTS[index];
   executeRequest(endpoint, stageName, authData);
