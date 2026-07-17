@@ -26,7 +26,7 @@ function parseDuration(durationStr) {
 
 // 1. Programmatically assemble sequential scenarios for each stage
 let currentStartTimeSec = 0;
-const maxVusOverride = __ENV.MAX_VUS_OVERRIDE ? parseInt(__ENV.MAX_VUS_OVERRIDE, 10) : null;
+const maxVusOverride = (__ENV.K6_MAX_VUS_OVERRIDE || __ENV.MAX_VUS_OVERRIDE) ? parseInt(__ENV.K6_MAX_VUS_OVERRIDE || __ENV.MAX_VUS_OVERRIDE, 10) : null;
 
 STAGES_CONFIGURED.forEach((stage) => {
   const scenarioName = `stage_${stage.name}`;

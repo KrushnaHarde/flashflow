@@ -42,14 +42,20 @@ export const ENDPOINTS = [
 // Load stages definition
 // In a full run, this is a 20-minute test.
 // Chaining is handled via scenario startTime offsets.
+// Memory Budget Calculation:
+// Instance: m7i-flex.large (8GB physical RAM, ~7.5GB usable after hypervisor overhead).
+// Headroom for Host: We allocate 2.5GB for the OS, background metrics collectors, and file system page caches, leaving 5GB (5120MB) dedicated to k6.
+// Memory per VU: Each k6 VU running this script consumes approximately 3.0MB.
+// Maximum Safe VU allocation: 5120MB / 3.0MB = 1706 VUs.
+// We configure the largest stage (10k_rps) to cap at 1500 maxVUs (requiring ~4.5GB peak memory), which keeps peak usage safely under our limits.
 export const STAGES = [
-  { name: '1_rps', target: 1, durationRamp: '30s', durationHold: '1m', preAllocatedVUs: 2, maxVUs: 10 },
-  { name: '10_rps', target: 10, durationRamp: '30s', durationHold: '1m', preAllocatedVUs: 10, maxVUs: 50 },
-  { name: '100_rps', target: 100, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 50, maxVUs: 300 },
-  { name: '500_rps', target: 500, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 200, maxVUs: 1500 },
-  { name: '1k_rps', target: 1000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 500, maxVUs: 3000 },
-  { name: '5k_rps', target: 5000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 1500, maxVUs: 4000 },
-  { name: '10k_rps', target: 10000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 3000, maxVUs: 6000 },
+  { name: '1_rps', target: 1, durationRamp: '30s', durationHold: '1m', preAllocatedVUs: 1, maxVUs: 5 },
+  { name: '10_rps', target: 10, durationRamp: '30s', durationHold: '1m', preAllocatedVUs: 2, maxVUs: 10 },
+  { name: '100_rps', target: 100, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 20, maxVUs: 50 },
+  { name: '500_rps', target: 500, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 50, maxVUs: 150 },
+  { name: '1k_rps', target: 1000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 100, maxVUs: 300 },
+  { name: '5k_rps', target: 5000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 300, maxVUs: 1000 },
+  { name: '10k_rps', target: 10000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 500, maxVUs: 1500 },
 ];
 
 // Helper to determine if we are running a short debugging test
