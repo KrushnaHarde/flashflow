@@ -129,7 +129,7 @@ function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason) {
   const processedStages = [];
   const droppedIterationsCount = metrics.dropped_iterations ? (metrics.dropped_iterations.values.count || 0) : 0;
 
-  stagesList.forEach((stageName) => {
+  stagesList.forEach((stageName, index) => {
     const duration = durations[stageName];
     const targetRps = targetRpsMap[stageName];
     
@@ -227,14 +227,25 @@ function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason) {
 
     // Check if aborted
     let isAborted = false;
-    if (isKilled && index > lastActiveIndex) {
-      isAborted = true;
+    let abortReason = "";
+    if (isKilled) {
+      if (index > lastActiveIndex) {
+        isAborted = true;
+        if (lastActiveIndex === -1 && index === 0) {
+          abortReason = terminationReason ? `Process terminated during setup/startup — ${terminationReason}` : "Process terminated during setup/startup — likely OOM";
+        } else {
+          abortReason = "Stage not reached";
+        }
+      } else if (index === lastActiveIndex) {
+        isAborted = true;
+        abortReason = terminationReason ? `Process terminated — ${terminationReason}` : "Process terminated — likely OOM";
+      }
     }
 
     if (isAborted) {
       slaStatus = 'ABORTED';
       bottleneckCause = 'Load Generator Termination';
-      bottleneckEvidence = `Stage not run | ${terminationReason || 'Process terminated'}`;
+      bottleneckEvidence = abortReason;
       bottleneckRec = 'Check load generator memory headroom or VU ceilings; run with --max-vus-override capped to lower limits.';
     } else {
       if (scrapeFailed) {
@@ -339,7 +350,7 @@ function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason) {
  * 3. Calculate Knee-Point (breaking point)
  */
 function findKneePoint(stages) {
-  const activeStages = stages.filter(s => s.requestCount > 0);
+  const activeStages = stages.filter(s => s.requestCount > 0 && s.slaStatus !== 'ABORTED');
   if (!activeStages.length) {
     return { stageName: 'N/A', targetRps: 0, bottleneck: { cause: 'N/A' } };
   }
@@ -374,8 +385,16 @@ function findKneePoint(stages) {
  */
 function calculatePerformanceScore(stages) {
   // Aggregate averages across stages
-  const activeStages = stages.filter(s => s.requestCount > 0);
-  if (!activeStages.length) return { overall: 0 };
+  const activeStages = stages.filter(s => s.requestCount > 0 && s.slaStatus !== 'ABORTED');
+  if (!activeStages.length) return {
+    correctness: 0,
+    latency: 0,
+    throughput: 0,
+    stability: 0,
+    errorRate: 0,
+    resource: 0,
+    overall: 0
+  };
 
   const avgErrorRate = activeStages.reduce((sum, s) => sum + s.errorRate, 0) / activeStages.length;
   const avgP95 = activeStages.reduce((sum, s) => sum + s.p95Latency, 0) / activeStages.length;
@@ -650,9 +669,15 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, t
   const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
   const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
 
+  // Helper to format values as N/A for aborted/unreached stages
+  const fmt = (s, val, formattedVal) => (s.slaStatus === 'ABORTED' && s.requestCount === 0) ? 'N/A' : formattedVal;
+
+  const stoppedStage = stages.find(s => s.slaStatus === 'ABORTED');
+  const stoppedStageName = stoppedStage ? stoppedStage.stageName : 'setup';
+
   let md = `# Executive Performance Report: FlashFlow Stress Capacity\n\n`;
   if (isKilled) {
-    md += `> [!CAUTION]\n> **This run did not complete all stages; results below reflect only stages that finished before termination.**\n> (Reason: ${terminationReason || 'Unknown'})\n\n`;
+    md += `> [!CAUTION]\n> **This run did not complete all stages; results below reflect only stages that finished before termination (stopped at stage: ${stoppedStageName}).**\n> (Reason: ${terminationReason || 'Unknown'})\n\n`;
   }
   md += `## Executive Summary\n\n`;
   md += `- **Maximum Sustained Throughput**: ${Math.round(stages.filter(s => s.slaStatus === 'PASS').reduce((max, s) => Math.max(max, s.actualRps), 0))} RPS\n`;
@@ -685,7 +710,7 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, t
     const kafkaLagStr = s.system.kafkaLag !== null ? s.system.kafkaLag.toString() : 'SCRAPE_FAILED';
     const expiredStr = s.expiredCount.toString();
     const workerRateStr = s.workerConfirmRate.toFixed(1);
-    md += `| **${s.stageName}** | ${s.targetRps} | ${s.actualRps.toFixed(1)} | ${s.requestCount} | ${s.p95Latency.toFixed(1)} ms | ${s.p99Latency.toFixed(1)} ms | ${(s.errorRate * 100).toFixed(2)}% | ${cpuStr} | ${hikariStr} | ${kafkaLagStr} | ${expiredStr} | ${workerRateStr} / s | ${s.reconciledCount} | ${s.reconFailedCount} | ${s.idempotencyMismatch} | ${s.optimisticLockRetry} | ${s.droppedIterations} | ${s.slaStatus} |\n`;
+    md += `| **${s.stageName}** | ${s.targetRps} | ${fmt(s, s.actualRps, s.actualRps.toFixed(1))} | ${fmt(s, s.requestCount, s.requestCount.toString())} | ${fmt(s, s.p95Latency, `${s.p95Latency.toFixed(1)} ms`)} | ${fmt(s, s.p99Latency, `${s.p99Latency.toFixed(1)} ms`)} | ${fmt(s, s.errorRate, `${(s.errorRate * 100).toFixed(2)}%`)} | ${cpuStr} | ${hikariStr} | ${kafkaLagStr} | ${fmt(s, s.expiredCount, expiredStr)} | ${fmt(s, s.workerConfirmRate, `${workerRateStr} / s`)} | ${fmt(s, s.reconciledCount, s.reconciledCount.toString())} | ${fmt(s, s.reconFailedCount, s.reconFailedCount.toString())} | ${fmt(s, s.idempotencyMismatch, s.idempotencyMismatch.toString())} | ${fmt(s, s.optimisticLockRetry, s.optimisticLockRetry.toString())} | ${fmt(s, s.droppedIterations, s.droppedIterations.toString())} | ${s.slaStatus} |\n`;
   });
   md += `\n`;
 
@@ -727,6 +752,12 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
   const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
   const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
 
+  // Helper to format values as N/A for aborted/unreached stages
+  const fmt = (s, val, formattedVal) => (s.slaStatus === 'ABORTED' && s.requestCount === 0) ? 'N/A' : formattedVal;
+
+  const stoppedStage = stages.find(s => s.slaStatus === 'ABORTED');
+  const stoppedStageName = stoppedStage ? stoppedStage.stageName : 'setup';
+
   const stageLabels = stages.map(s => s.stageName.replace('_rps', ''));
   const latencyValues = stages.map(s => s.p95Latency);
   const rpsValues = stages.map(s => s.actualRps);
@@ -746,40 +777,51 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
 
   let historyHtml = '';
   if (historyComp) {
-    historyHtml = `
-      <div class="card card-history">
-        <h2>🔄 Comparison with Previous Run (${new Date(historyComp.prevTimestamp).toLocaleString()})</h2>
-        <div class="score-delta ${historyComp.scoreDelta >= 0 ? 'good' : 'bad'}">
-          Overall Score Delta: ${historyComp.scoreDelta >= 0 ? '+' : ''}${historyComp.scoreDelta}
+    if (isKilled) {
+      historyHtml = `
+        <div class="card card-history">
+          <h2>🔄 Comparison with Previous Run</h2>
+          <div style="color: var(--accent-red); font-weight: bold; font-size: 1rem; margin-top: 15px;">
+            ⚠️ Comparison skipped because this test run did not complete (aborted/OOM killed).
+          </div>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Stage</th>
-              <th>Current p95</th>
-              <th>Previous p95</th>
-              <th>Latency Delta</th>
-              <th>Current RPS</th>
-              <th>Previous RPS</th>
-              <th>Throughput Delta</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${historyComp.stages.map(s => `
+      `;
+    } else {
+      historyHtml = `
+        <div class="card card-history">
+          <h2>🔄 Comparison with Previous Run (${new Date(historyComp.prevTimestamp).toLocaleString()})</h2>
+          <div class="score-delta ${historyComp.scoreDelta >= 0 ? 'good' : 'bad'}">
+            Overall Score Delta: ${historyComp.scoreDelta >= 0 ? '+' : ''}${historyComp.scoreDelta}
+          </div>
+          <table>
+            <thead>
               <tr>
-                <td><strong>${s.stageName}</strong></td>
-                <td>${s.currP95.toFixed(1)} ms</td>
-                <td>${s.prevP95.toFixed(1)} ms</td>
-                <td class="${s.p95Delta <= 0 ? 'delta-good' : 'delta-bad'}">${s.p95Delta.toFixed(1)} ms</td>
-                <td>${s.currRps.toFixed(0)}</td>
-                <td>${s.prevRps.toFixed(0)}</td>
-                <td class="${s.rpsDelta >= 0 ? 'delta-good' : 'delta-bad'}">${s.rpsDelta.toFixed(0)}</td>
+                <th>Stage</th>
+                <th>Current p95</th>
+                <th>Previous p95</th>
+                <th>Latency Delta</th>
+                <th>Current RPS</th>
+                <th>Previous RPS</th>
+                <th>Throughput Delta</th>
               </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    `;
+            </thead>
+            <tbody>
+              ${historyComp.stages.map(s => `
+                <tr>
+                  <td><strong>${s.stageName}</strong></td>
+                  <td>${s.currP95.toFixed(1)} ms</td>
+                  <td>${s.prevP95.toFixed(1)} ms</td>
+                  <td class="${s.p95Delta <= 0 ? 'delta-good' : 'delta-bad'}">${s.p95Delta.toFixed(1)} ms</td>
+                  <td>${s.currRps.toFixed(0)}</td>
+                  <td>${s.prevRps.toFixed(0)}</td>
+                  <td class="${s.rpsDelta >= 0 ? 'delta-good' : 'delta-bad'}">${s.rpsDelta.toFixed(0)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
   }
 
   return `<!DOCTYPE html>
@@ -949,6 +991,7 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
     .delta-bad { color: var(--accent-red); }
     .score-delta.good { color: var(--accent-green); font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;}
     .score-delta.bad { color: var(--accent-red); font-size: 1.1rem; font-weight: bold; margin-bottom: 10px;}
+    .status-aborted { color: var(--accent-red); font-weight: bold; }
   </style>
 </head>
 <body>
@@ -959,8 +1002,8 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
     </header>
 
     ${isKilled ? `
-      <div style="background: rgba(229, 62, 62, 0.15); border: 1px solid rgba(229, 62, 62, 0.3); border-radius: 12px; padding: 15px; margin-bottom: 20px; color: #f56565; font-weight: bold; font-size: 1rem;">
-        🛑 This run did not complete all stages; results below reflect only stages that finished before termination. (Reason: ${terminationReason || 'Unknown'})
+      <div style="background: rgba(229, 62, 62, 0.15); border: 1px solid rgba(229, 62, 62, 0.3); border-radius: 12px; padding: 15px; margin-bottom: 20px; color: #f56565; font-weight: bold; font-size: 1.1rem; text-align: center;">
+        🛑 This run did not complete — results below reflect only stages that finished before termination (stopped at stage: ${stoppedStageName}). Reason: ${terminationReason || 'Unknown'}
       </div>
     ` : ''}
 
@@ -1046,22 +1089,22 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
             <tr>
               <td><strong>${s.stageName}</strong></td>
               <td>${s.targetRps}</td>
-              <td>${s.actualRps.toFixed(1)}</td>
-              <td>${s.requestCount}</td>
-              <td>${s.p95Latency.toFixed(1)} ms</td>
-              <td>${s.p99Latency.toFixed(1)} ms</td>
-              <td>${(s.errorRate * 100).toFixed(2)}%</td>
+              <td>${fmt(s, s.actualRps, s.actualRps.toFixed(1))}</td>
+              <td>${fmt(s, s.requestCount, s.requestCount.toString())}</td>
+              <td>${fmt(s, s.p95Latency, `${s.p95Latency.toFixed(1)} ms`)}</td>
+              <td>${fmt(s, s.p99Latency, `${s.p99Latency.toFixed(1)} ms`)}</td>
+              <td>${fmt(s, s.errorRate, `${(s.errorRate * 100).toFixed(2)}%`)}</td>
               <td>${s.system.cpuMax !== null ? `${(s.system.cpuMax * 100).toFixed(0)}%` : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
               <td>${s.system.hikariActive !== null ? s.system.hikariActive.toFixed(1) : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
               <td>${s.system.kafkaLag !== null ? s.system.kafkaLag : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
-              <td>${s.expiredCount}</td>
-              <td>${s.workerConfirmRate.toFixed(1)} / s</td>
-              <td>${s.reconciledCount}</td>
-              <td>${s.reconFailedCount}</td>
-              <td>${s.idempotencyMismatch}</td>
-              <td>${s.optimisticLockRetry}</td>
-              <td>${s.droppedIterations}</td>
-              <td><span class="${s.slaStatus === 'PASS' ? 'status-pass' : (s.slaStatus === 'INCONCLUSIVE' ? 'status-inconclusive' : (s.slaStatus === 'INVALID' ? 'status-invalid' : 'status-fail'))}">${s.slaStatus}</span></td>
+              <td>${fmt(s, s.expiredCount, s.expiredCount.toString())}</td>
+              <td>${fmt(s, s.workerConfirmRate, `${s.workerConfirmRate.toFixed(1)} / s`)}</td>
+              <td>${fmt(s, s.reconciledCount, s.reconciledCount.toString())}</td>
+              <td>${fmt(s, s.reconFailedCount, s.reconFailedCount.toString())}</td>
+              <td>${fmt(s, s.idempotencyMismatch, s.idempotencyMismatch.toString())}</td>
+              <td>${fmt(s, s.optimisticLockRetry, s.optimisticLockRetry.toString())}</td>
+              <td>${fmt(s, s.droppedIterations, s.droppedIterations.toString())}</td>
+              <td><span class="${s.slaStatus === 'PASS' ? 'status-pass' : (s.slaStatus === 'INCONCLUSIVE' ? 'status-inconclusive' : (s.slaStatus === 'INVALID' ? 'status-invalid' : (s.slaStatus === 'ABORTED' ? 'status-aborted' : 'status-fail')))}">${s.slaStatus}</span></td>
             </tr>
           `).join('')}
         </tbody>
@@ -1223,8 +1266,10 @@ function main() {
     }
   };
 
-  // Archive run data inside history (for comparisons)
-  fs.writeFileSync(path.join(HISTORY_DIR, `run_${timestamp}.json`), JSON.stringify(runRecord, null, 2), 'utf8');
+  // Archive run data inside history (for comparisons) - only if it completed successfully
+  if (!isKilled) {
+    fs.writeFileSync(path.join(HISTORY_DIR, `run_${timestamp}.json`), JSON.stringify(runRecord, null, 2), 'utf8');
+  }
 
   // HTML Dashboard
   const htmlContent = generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason);
