@@ -103,17 +103,12 @@ public class OrderFulfillmentService {
         paymentRepository.save(payment);
         log.info("Created Payment {} in PENDING state for Order {}", paymentId, orderId);
 
-        // 6. Update DB Inventory
-        Inventory inventory = inventoryRepository.findById(event.getProductId())
-                .orElseThrow(() -> new IllegalArgumentException("Inventory not found for product: " + event.getProductId()));
-
-        if (inventory.getAvailableStock() < event.getQuantity()) {
+        // 6. Update DB Inventory atomically to prevent concurrency lock contention
+        int updated = inventoryRepository.decrementStock(event.getProductId(), event.getQuantity());
+        if (updated == 0) {
             throw new IllegalArgumentException("Insufficient stock available in DB for product: " + event.getProductId());
         }
-        inventory.setAvailableStock(inventory.getAvailableStock() - event.getQuantity());
-        inventory.setTotalStock(inventory.getTotalStock() - event.getQuantity());
-        inventoryRepository.save(inventory);
-        log.info("Updated DB Inventory for product: {}. Decremented totalStock and availableStock by {}", 
+        log.info("Atomically updated DB Inventory for product: {}. Decremented totalStock and availableStock by {}", 
                 event.getProductId(), event.getQuantity());
 
         // 7. Insert OutboxEvent for PAYMENT relay
