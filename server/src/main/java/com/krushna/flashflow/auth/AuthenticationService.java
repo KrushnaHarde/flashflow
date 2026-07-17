@@ -183,6 +183,17 @@ public class AuthenticationService {
         jdbcTemplate.execute("DELETE FROM reservations");
         jdbcTemplate.execute("DELETE FROM outbox_events");
         jdbcTemplate.execute("DELETE FROM idempotency_keys");
+        
+        // Reset database inventory to 1,000,000
+        jdbcTemplate.execute("UPDATE inventory SET total_stock = 1000000, available_stock = 1000000, reserved_stock = 0 WHERE product_id = '5169a9b2-3b2d-4bf8-a46c-7e61e06cd2df'");
+        
+        // Reset Redis inventory cache to 1,000,000
+        try {
+            stringRedisTemplate.opsForValue().set("product:5169a9b2-3b2d-4bf8-a46c-7e61e06cd2df:stock", "1000000");
+            log.info("Reset Redis and DB product inventory stock to 1,000,000");
+        } catch (Exception e) {
+            log.error("Failed to reset Redis product stock in bulkRegister", e);
+        }
 
         log.info("Bulk registering {} users...", count);
         final java.util.List<java.util.Map<String, Object>> userPool = new java.util.ArrayList<>();
