@@ -15,4 +15,9 @@ public class TestKafkaConfig {
     public KafkaTemplate<String, String> kafkaTemplate() {
         return Mockito.mock(KafkaTemplate.class);
     }
+
+    @Bean
+    public org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate() {
+        return Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class, Mockito.RETURNS_DEEP_STUBS);
+    }
 }

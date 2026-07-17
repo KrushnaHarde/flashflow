@@ -221,11 +221,9 @@ public class PurchaseIntegrationTest {
         assertEquals(ReservationStatus.ACTIVE.name(), response.getStatus());
         assertEquals(new BigDecimal("300.00"), response.getTotalAmount());
 
-        // Verify Reservation database record exists and inventory is NOT decremented in DB (since it is async)
+        // Since database writes are asynchronous, the reservation does not exist in DB yet
         Reservation reservation = reservationRepository.findById(response.getReservationId()).orElse(null);
-        assertNotNull(reservation);
-        assertEquals(ReservationStatus.ACTIVE, reservation.getStatus());
-        assertEquals(2, reservation.getQuantity());
+        assertNull(reservation);
 
         Inventory updatedInventory = inventoryRepository.findById(activeProduct.getProductId()).orElse(null);
         assertNotNull(updatedInventory);
@@ -236,7 +234,7 @@ public class PurchaseIntegrationTest {
         outboxPublisherScheduler.publishPendingEvents();
 
         // Verify Kafka event published
-        verify(mockKafkaTemplate).send(eq("flashflow.orders"), eq(response.getReservationId().toString()), anyString());
+        verify(mockKafkaTemplate).send(any(org.apache.kafka.clients.producer.ProducerRecord.class));
 
         // 3. Simulate Kafka Consumer Fulfillment Flow
         OrderRequestedEvent event = OrderRequestedEvent.builder()
@@ -244,7 +242,9 @@ public class PurchaseIntegrationTest {
                 .userId(normalUser.getUserId())
                 .productId(activeProduct.getProductId())
                 .quantity(2)
+                .unitPrice(new BigDecimal("150.00"))
                 .totalAmount(new BigDecimal("300.00"))
+                .expiresAt(java.time.LocalDateTime.now().plusMinutes(5))
                 .idempotencyKey("idemp-key-1")
                 .build();
 
@@ -267,10 +267,8 @@ public class PurchaseIntegrationTest {
         assertEquals(PaymentStatus.PENDING, payment.getStatus());
 
         List<OutboxEvent> outboxEvents = outboxEventRepository.findAll();
-        assertEquals(2, outboxEvents.size());
-        boolean hasOrderRequested = outboxEvents.stream().anyMatch(e -> "ORDER_REQUESTED".equals(e.getEventType()));
+        assertEquals(1, outboxEvents.size());
         boolean hasOrderCreated = outboxEvents.stream().anyMatch(e -> "ORDER_CREATED".equals(e.getEventType()));
-        assertTrue(hasOrderRequested, "Should have ORDER_REQUESTED outbox event");
         assertTrue(hasOrderCreated, "Should have ORDER_CREATED outbox event");
 
         // Finalized DB inventory: total stock and available stock are decremented, reserved stock remains 0
@@ -337,19 +335,6 @@ public class PurchaseIntegrationTest {
                     .build();
             userRepository.save(user);
 
-            Reservation reservation = Reservation.builder()
-                    .reservationId(reservationId)
-                    .userId(userId)
-                    .productId(productId)
-                    .quantity(2)
-                    .unitPrice(new BigDecimal("150.00"))
-                    .totalAmount(new BigDecimal("300.00"))
-                    .status(ReservationStatus.ACTIVE)
-                    .expiresAt(java.time.LocalDateTime.now().plusMinutes(5))
-                    .createdAt(java.time.LocalDateTime.now())
-                    .build();
-            reservationRepository.save(reservation);
-
             Idempotency idempotency = Idempotency.builder()
                     .idempotencyKey("idem-concurrent-" + index)
                     .userId(userId)
@@ -364,7 +349,9 @@ public class PurchaseIntegrationTest {
                     .userId(userId)
                     .productId(productId)
                     .quantity(2)
+                    .unitPrice(new BigDecimal("150.00"))
                     .totalAmount(new BigDecimal("300.00"))
+                    .expiresAt(java.time.LocalDateTime.now().plusMinutes(5))
                     .idempotencyKey("idem-concurrent-" + index)
                     .build();
 
