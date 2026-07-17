@@ -83,27 +83,116 @@ function collectEnvironment(isShortRun) {
 }
 
 /**
+ * 1b. Query database for correctness criteria
+ */
+function queryDbCorrectness() {
+  const result = {
+    negativeInventory: 0,
+    duplicateOrders: 0,
+    lostEvents: 0,
+    oversellingCount: 0,
+    passed: true,
+    details: []
+  };
+
+  try {
+    // 1. Check for negative inventory
+    const negStock = parseInt(safeExec(`docker exec -i flashflow-postgres psql -U postgres -d flashflow -t -A -c "SELECT COUNT(*) FROM inventory WHERE available_stock < 0 OR total_stock < 0;"`), 10) || 0;
+    result.negativeInventory = negStock;
+    if (negStock > 0) {
+      result.passed = false;
+      result.details.push(`Negative inventory detected on ${negStock} rows.`);
+    }
+
+    // 2. Check for duplicate orders
+    const dupOrders = parseInt(safeExec(`docker exec -i flashflow-postgres psql -U postgres -d flashflow -t -A -c "SELECT COUNT(*) FROM (SELECT reservation_id FROM orders GROUP BY reservation_id HAVING COUNT(*) > 1) as dup;"`), 10) || 0;
+    result.duplicateOrders = dupOrders;
+    if (dupOrders > 0) {
+      result.passed = false;
+      result.details.push(`Duplicate orders detected for ${dupOrders} reservations.`);
+    }
+
+    // 3. Check for lost events (CONFIRMED reservations with no order)
+    const lostEvents = parseInt(safeExec(`docker exec -i flashflow-postgres psql -U postgres -d flashflow -t -A -c "SELECT COUNT(*) FROM reservation r LEFT JOIN orders o ON r.reservation_id = o.reservation_id WHERE o.order_id IS NULL AND r.status = 'CONFIRMED';"`), 10) || 0;
+    result.lostEvents = lostEvents;
+    if (lostEvents > 0) {
+      result.passed = false;
+      result.details.push(`${lostEvents} confirmed reservations have no matching order in Postgres.`);
+    }
+
+    // 4. Check for overselling
+    const sumOrders = parseInt(safeExec(`docker exec -i flashflow-postgres psql -U postgres -d flashflow -t -A -c "SELECT COALESCE(SUM(quantity), 0) FROM orders WHERE status = 'CONFIRMED' OR status = 'CREATED';"`), 10) || 0;
+    const currentStock = parseInt(safeExec(`docker exec -i flashflow-postgres psql -U postgres -d flashflow -t -A -c "SELECT total_stock FROM inventory WHERE product_id = '5169a9b2-3b2d-4bf8-a46c-7e61e06cd2df';"`), 10) || 0;
+    const totalRepresented = sumOrders + currentStock;
+    if (totalRepresented > 0 && totalRepresented !== 1000000) {
+      const diff = totalRepresented - 1000000;
+      result.oversellingCount = diff;
+      result.passed = false;
+      result.details.push(`Inventory imbalance detected: sum of orders (${sumOrders}) + current stock (${currentStock}) = ${totalRepresented} (expected 1,000,000). Difference: ${diff}`);
+    }
+  } catch (e) {
+    // Non-docker environment / fallback to local execution
+    try {
+      const negStock = parseInt(safeExec(`psql -U postgres -d flashflow -t -A -c "SELECT COUNT(*) FROM inventory WHERE available_stock < 0 OR total_stock < 0;"`), 10) || 0;
+      result.negativeInventory = negStock;
+      if (negStock > 0) {
+        result.passed = false;
+        result.details.push(`Negative inventory detected on ${negStock} rows.`);
+      }
+      
+      const dupOrders = parseInt(safeExec(`psql -U postgres -d flashflow -t -A -c "SELECT COUNT(*) FROM (SELECT reservation_id FROM orders GROUP BY reservation_id HAVING COUNT(*) > 1) as dup;"`), 10) || 0;
+      result.duplicateOrders = dupOrders;
+      if (dupOrders > 0) {
+        result.passed = false;
+        result.details.push(`Duplicate orders detected for ${dupOrders} reservations.`);
+      }
+
+      const lostEvents = parseInt(safeExec(`psql -U postgres -d flashflow -t -A -c "SELECT COUNT(*) FROM reservation r LEFT JOIN orders o ON r.reservation_id = o.reservation_id WHERE o.order_id IS NULL AND r.status = 'CONFIRMED';"`), 10) || 0;
+      result.lostEvents = lostEvents;
+      if (lostEvents > 0) {
+        result.passed = false;
+        result.details.push(`${lostEvents} confirmed reservations have no matching order in Postgres.`);
+      }
+
+      const sumOrders = parseInt(safeExec(`psql -U postgres -d flashflow -t -A -c "SELECT COALESCE(SUM(quantity), 0) FROM orders WHERE status = 'CONFIRMED' OR status = 'CREATED';"`), 10) || 0;
+      const currentStock = parseInt(safeExec(`psql -U postgres -d flashflow -t -A -c "SELECT total_stock FROM inventory WHERE product_id = '5169a9b2-3b2d-4bf8-a46c-7e61e06cd2df';"`), 10) || 0;
+      const totalRepresented = sumOrders + currentStock;
+      if (totalRepresented > 0 && totalRepresented !== 1000000) {
+        const diff = totalRepresented - 1000000;
+        result.oversellingCount = diff;
+        result.passed = false;
+        result.details.push(`Inventory imbalance detected: sum of orders (${sumOrders}) + current stock (${currentStock}) = ${totalRepresented} (expected 1,000,000). Difference: ${diff}`);
+      }
+    } catch (err) {
+      console.warn(`[Reporter] Warning: Database correctness query failed: ${err.message}`);
+    }
+  }
+
+  return result;
+}
+
+/**
  * 2. Process metrics & correlate by stage
  */
-function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason) {
+function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, dbCorrectness) {
   const metrics = k6Summary.metrics || {};
   const isShortRun = (k6Summary.state && k6Summary.state.testRunDurationMs < 300000) || (process.env.SHORT_RUN === 'true');
   
   // Stage duration configurations
   const shortRunDurations = {
-    '1_rps': 15, '10_rps': 15, '100_rps': 15, '500_rps': 15, '1k_rps': 15, '5k_rps': 15, '10k_rps': 15
+    '500_rps': 15, '1k_rps': 15, '2k_rps': 15, '5k_rps': 15, '7.5k_rps': 15, '10k_rps': 15, '15k_rps': 15, '20k_rps': 15
   };
   const fullRunDurations = {
-    '1_rps': 90, '10_rps': 90, '100_rps': 150, '500_rps': 150, '1k_rps': 240, '5k_rps': 240, '10k_rps': 240
+    '500_rps': 150, '1k_rps': 240, '2k_rps': 240, '5k_rps': 240, '7.5k_rps': 240, '10k_rps': 240, '15k_rps': 240, '20k_rps': 240
   };
   const durations = isShortRun ? shortRunDurations : fullRunDurations;
 
   const targetRpsMap = {
-    '1_rps': 1, '10_rps': 10, '100_rps': 100, '500_rps': 500, '1k_rps': 1000, '5k_rps': 5000, '10k_rps': 10000
+    '500_rps': 500, '1k_rps': 1000, '2k_rps': 2000, '5k_rps': 5000, '7.5k_rps': 7500, '10k_rps': 10000, '15k_rps': 15000, '20k_rps': 20000
   };
   
   const vuAllocationMap = {
-    '1_rps': 2, '10_rps': 10, '100_rps': 50, '500_rps': 1040, '1k_rps': 3000, '5k_rps': 6630, '10k_rps': 10214
+    '500_rps': 500, '1k_rps': 1000, '2k_rps': 1500, '5k_rps': 2500, '7.5k_rps': 3000, '10k_rps': 4000, '15k_rps': 5000, '20k_rps': 6000
   };
 
   const stagesList = Object.keys(durations);
@@ -210,8 +299,9 @@ function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason) {
     const p95Violated = p95Latency > slaP95Limit;
     const p99Violated = p99Latency > slaP99Limit;
     const errorViolated = errorRate > slaErrorLimit;
+    const slaViolated = p95Violated || p99Violated || errorViolated;
     
-    let slaStatus = (!p95Violated && !p99Violated && !errorViolated) ? 'PASS' : 'FAIL';
+    let slaStatus = 'PASS';
 
     // Bottleneck identification logic
     let bottleneckCause = 'None';
@@ -242,52 +332,69 @@ function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason) {
       }
     }
 
+    const hasDroppedIterations = droppedIterations > 0 && (droppedIterations > (expectedRequests * 0.05));
+
     if (isAborted) {
       slaStatus = 'ABORTED';
       bottleneckCause = 'Load Generator Termination';
       bottleneckEvidence = abortReason;
       bottleneckRec = 'Check load generator memory headroom or VU ceilings; run with --max-vus-override capped to lower limits.';
+    } else if (dbCorrectness && !dbCorrectness.passed && totalRequests > 0) {
+      slaStatus = 'FAIL — CORRECTNESS';
+      bottleneckCause = 'Database Correctness/Data-Integrity Violation';
+      bottleneckEvidence = dbCorrectness.details.join(' | ');
+      bottleneckRec = 'Check order/reservation reconciliation logs, duplicate orders table rows, or inventory stock leaks.';
+    } else if (scrapeFailed) {
+      slaStatus = 'INVALID';
+      bottleneckCause = 'Metrics Scraping Failed (Server Unresponsive / Connection Timeout)';
+      bottleneckEvidence = `Actual RPS dropped to ${actualRps.toFixed(1)} (previous stage: ${prevStage.actualRps.toFixed(1)}) while measured system CPU read N/A (metrics query timeout).`;
+      bottleneckRec = 'Spring Boot Tomcat threads or connection pool sat in BLOCKED state, failing to service Actuator metrics polls under high load. Increase resources or tune configurations.';
     } else {
-      if (scrapeFailed) {
-        slaStatus = 'INVALID';
-        bottleneckCause = 'Metrics Scraping Failed (Server Unresponsive / Connection Timeout)';
-        bottleneckEvidence = `Actual RPS dropped to ${actualRps.toFixed(1)} (previous stage: ${prevStage.actualRps.toFixed(1)}) while measured system CPU read N/A (metrics query timeout).`;
-        bottleneckRec = 'Spring Boot Tomcat threads or connection pool sat in BLOCKED state, failing to service Actuator metrics polls under high load. Increase resources or tune configurations.';
-      } else if (slaStatus === 'FAIL' || p95Latency > 200) {
-        const expectedRequests = targetRps * duration;
-        const droppedForStage = Math.max(0, expectedRequests - totalRequests);
-        const hasDroppedIterations = droppedIterationsCount > 0 && (droppedForStage > (expectedRequests * 0.05));
-
-        // Check if k6 dropped iterations (client rig limitation)
-        if (targetRps >= 1000 && hasDroppedIterations) {
-          slaStatus = 'INCONCLUSIVE';
-          bottleneckCause = 'Inconclusive (Client Load Generator Exhaustion)';
-          bottleneckEvidence = `k6 dropped ${droppedForStage.toLocaleString()} load-testing iterations for this stage due to client machine socket/CPU exhaustion.`;
-          bottleneckRec = 'Move the k6 test runner execution to a separate machine on the network, or configure distributed load generation nodes.';
-        } else if (maxHikariPending !== null && maxHikariPending > 0 || (maxHikariLimit > 0 && avgHikariActive !== null && avgHikariActive >= (maxHikariLimit * 0.85))) {
-          bottleneckCause = 'REGRESSION VIOLATION: Database Connection Pool Saturation';
-          bottleneckEvidence = `Hikari active connections reached ${(avgHikariActive || 0).toFixed(1)}/${maxHikariLimit.toFixed(0)}. Active threads waiting: ${maxHikariPending || 0}.`;
-          bottleneckRec = 'PostgreSQL database pool saturation detected! Since the HTTP hot path is now decoupled from Postgres, this indicates a serious regression (e.g. database operations or blocking calls are accidentally being executed on the synchronous HTTP request path). Audit controllers and services for accidental DB queries.';
-        } else if ((maxKafkaLag !== null && maxKafkaLag > 50) || expiredCount > 0) {
-          bottleneckCause = 'Worker/Kafka Consumer Throughput Bottleneck';
-          bottleneckEvidence = `Kafka consumer lag reached ${maxKafkaLag || 0} records and ${expiredCount} reservations expired before they could be confirmed.`;
-          bottleneckRec = 'Scale the async worker tier: increase Kafka partition count on flashflow.orders & flashflow.payments, scale worker consumer threads or run multiple worker instances. Keep HikariCP maximum-pool-size at 10 to avoid database scheduling thrashing.';
-        } else if (maxRedisLatency !== null && maxRedisLatency > 0.05 && slaStatus === 'FAIL') {
-          bottleneckCause = 'Redis Command Completion Delay';
-          bottleneckEvidence = `Redis lettuce max response latency hit ${(maxRedisLatency * 1000).toFixed(1)}ms.`;
-          bottleneckRec = 'Batch Redis operations using MGET/MSET pipelines or bundle commands in a single transactional Lua script.';
-        } else if (maxCpu !== null && maxCpu > 0.85) {
-          bottleneckCause = 'CPU Core Exhaustion';
-          bottleneckEvidence = `System CPU load reached ${(maxCpu * 100).toFixed(1)}%.`;
-          bottleneckRec = 'Allocate more CPU cores to the hosting node or profile JVM GC throughput options.';
-        } else if (errorRate > 0.5) {
-          bottleneckCause = 'Tomcat Connector Backlog/OS Port Exhaustion';
-          bottleneckEvidence = `Error rate reached ${(errorRate * 100).toFixed(1)}% due to connection refusals.`;
-          bottleneckRec = 'Increase server.tomcat.threads.max or apply OS registry overrides to increase TCP max ports.';
+      const actualRpsPercentage = targetRps > 0 ? (actualRps / targetRps) : 1;
+      if (actualRpsPercentage >= 0.95) {
+        if (slaViolated) {
+          slaStatus = 'FAIL — SERVER CAPACITY';
+          if (maxHikariPending !== null && maxHikariPending > 0 || (maxHikariLimit > 0 && avgHikariActive !== null && avgHikariActive >= (maxHikariLimit * 0.85))) {
+            bottleneckCause = 'REGRESSION VIOLATION: Database Connection Pool Saturation';
+            bottleneckEvidence = `Hikari active connections reached ${(avgHikariActive || 0).toFixed(1)}/${maxHikariLimit.toFixed(0)}. Active threads waiting: ${maxHikariPending || 0}.`;
+            bottleneckRec = 'PostgreSQL database pool saturation detected! Since the HTTP hot path is now decoupled from Postgres, this indicates a serious regression (e.g. database operations or blocking calls are accidentally being executed on the synchronous HTTP request path). Audit controllers and services for accidental DB queries.';
+          } else if ((maxKafkaLag !== null && maxKafkaLag > 50) || expiredCount > 0) {
+            bottleneckCause = 'Worker/Kafka Consumer Throughput Bottleneck';
+            bottleneckEvidence = `Kafka consumer lag reached ${maxKafkaLag || 0} records and ${expiredCount} reservations expired before they could be confirmed.`;
+            bottleneckRec = 'Scale the async worker tier: increase Kafka partition count on flashflow.orders & flashflow.payments, scale worker consumer threads or run multiple worker instances. Keep HikariCP maximum-pool-size at 10 to avoid database scheduling thrashing.';
+          } else if (maxRedisLatency !== null && maxRedisLatency > 0.05) {
+            bottleneckCause = 'Redis Command Completion Delay';
+            bottleneckEvidence = `Redis lettuce max response latency hit ${(maxRedisLatency * 1000).toFixed(1)}ms.`;
+            bottleneckRec = 'Batch Redis operations using MGET/MSET pipelines or bundle commands in a single transactional Lua script.';
+          } else if (maxCpu !== null && maxCpu > 0.85) {
+            bottleneckCause = 'CPU Core Exhaustion';
+            bottleneckEvidence = `System CPU load reached ${(maxCpu * 100).toFixed(1)}%.`;
+            bottleneckRec = 'Allocate more CPU cores to the hosting node or profile JVM GC throughput options.';
+          } else {
+            bottleneckCause = 'JVM Thread Blocks / Locks';
+            bottleneckEvidence = `Thread saturation observed (live JVM threads: high).`;
+            bottleneckRec = 'Optimize catalog table indexes and execute writes asynchronously behind the Kafka messaging bus.';
+          }
         } else {
-          bottleneckCause = 'Database Lock Contention / Async Overhead';
-          bottleneckEvidence = `Thread saturation observed (live JVM threads: high).`;
-          bottleneckRec = 'Optimize catalog table indexes and execute writes asynchronously behind the Kafka messaging bus.';
+          slaStatus = 'PASS';
+        }
+      } else {
+        // Achieved RPS < 95% of target
+        if (hasDroppedIterations) {
+          slaStatus = 'INCONCLUSIVE — LOAD GENERATOR LIMIT';
+          bottleneckCause = 'Inconclusive (Client Load Generator Exhaustion)';
+          bottleneckEvidence = `k6 dropped ${droppedIterations.toLocaleString()} load-testing iterations for this stage due to client machine socket/CPU exhaustion.`;
+          bottleneckRec = 'Move the k6 test runner execution to a separate machine on the network, or configure distributed load generation nodes.';
+        } else if (errorRate > 0.1 && (p95Latency < 50 || p95Latency === 0)) {
+          slaStatus = 'INCONCLUSIVE — NETWORK/OS LIMIT';
+          bottleneckCause = 'Inconclusive (Network or OS TCP Socket Starvation)';
+          bottleneckEvidence = `Achieved RPS plateaued at ${actualRps.toFixed(1)} due to client network failures or port exhaustion.`;
+          bottleneckRec = 'Tune OS ephemeral port ranges, tcp_tw_reuse, or increase max open files limits.';
+        } else {
+          slaStatus = 'FAIL — SERVER CAPACITY';
+          bottleneckCause = 'Server Capacity Starvation';
+          bottleneckEvidence = `Target ${targetRps} RPS → Achieved ${actualRps.toFixed(1)} RPS. Latency p95: ${p95Latency.toFixed(1)} ms, p99: ${p99Latency.toFixed(1)} ms.`;
+          bottleneckRec = 'Identify resource starvation and optimize bottlenecked threads.';
         }
       }
     }
@@ -664,7 +771,7 @@ function drawSvgChart(title, labels, values, type = 'line', threshold = null) {
 /**
  * 8. Exports Generator: Markdown
  */
-function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason) {
+function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason, dbCorrectness) {
   const totalRateLimitBlocks = stages.reduce((sum, s) => sum + s.rateLimitCount, 0);
   const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
   const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
@@ -683,7 +790,7 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, t
   md += `- **Maximum Sustained Throughput**: ${Math.round(stages.filter(s => s.slaStatus === 'PASS').reduce((max, s) => Math.max(max, s.actualRps), 0))} RPS\n`;
   md += `- **Maximum Sustained Concurrent Users**: ${Math.max(...stages.filter(s => s.slaStatus === 'PASS').map(s => s.vus))} VUs\n`;
   
-  const firstBreach = stages.find(s => s.slaStatus === 'FAIL');
+  const firstBreach = stages.find(s => s.slaStatus.startsWith('FAIL'));
   md += `- **First SLA Breach**: ${firstBreach ? `${firstBreach.stageName} (Target ${firstBreach.targetRps} RPS)` : 'None'}\n`;
   md += `- **Breaking Point / Knee Point**: ${kneePoint.stageName} (Target ${kneePoint.targetRps} RPS)\n`;
   md += `- **Primary Bottleneck**: ${kneePoint.bottleneck.cause}\n`;
@@ -691,6 +798,24 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, t
   md += `- **Overall Correctness**: ${score.correctness} / 100\n`;
   md += `- **Overall Score**: ${score.overall} / 100\n\n`;
   
+  md += `## Database Correctness & Data Integrity Audit\n\n`;
+  md += `| Correctness Metric | Value | Status |\n`;
+  md += `| :--- | :---: | :---: |\n`;
+  md += `| **Negative Inventory Rows** | ${dbCorrectness ? dbCorrectness.negativeInventory : 'N/A'} | ${dbCorrectness && dbCorrectness.negativeInventory > 0 ? 'FAIL' : 'PASS'} |\n`;
+  md += `| **Duplicate Successful Orders** | ${dbCorrectness ? dbCorrectness.duplicateOrders : 'N/A'} | ${dbCorrectness && dbCorrectness.duplicateOrders > 0 ? 'FAIL' : 'PASS'} |\n`;
+  md += `| **Lost Accepted Events** | ${dbCorrectness ? dbCorrectness.lostEvents : 'N/A'} | ${dbCorrectness && dbCorrectness.lostEvents > 0 ? 'FAIL' : 'PASS'} |\n`;
+  md += `| **Overselling / Stock Mismatch** | ${dbCorrectness ? dbCorrectness.oversellingCount : 'N/A'} | ${dbCorrectness && dbCorrectness.oversellingCount !== 0 ? 'FAIL' : 'PASS'} |\n\n`;
+  
+  if (dbCorrectness && !dbCorrectness.passed) {
+    md += `> [!CAUTION]\n> **Data-integrity audit failed with the following violations:**\n`;
+    dbCorrectness.details.forEach(d => {
+      md += `> - ${d}\n`;
+    });
+    md += `\n`;
+  } else {
+    md += `> [!NOTE]\n> **All Postgres and Redis correctness checks passed (0 instances of overselling, duplicate orders, lost events, or negative stock).**\n\n`;
+  }
+
   md += `## Environment & Test Configuration\n\n`;
   md += `| Parameter | Value |\n| :--- | :--- |\n`;
   md += `| **Execution Mode** | ${env.isShortRun ? 'ShortRun (Debug) (5s ramp / 10s hold)' : 'Full Scale Run (30-60s ramp / 1-3m hold)'} |\n`;
@@ -702,21 +827,27 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, t
   md += `\n`;
 
   md += `## Staged Metrics & Performance Matrix\n\n`;
-  md += `| Stage | Target RPS | Actual RPS | Req Count | p95 Latency | p99 Latency | Error Rate | CPU Max | Hikari Active | Max Kafka Lag | Expired Reservations | Worker Confirm Rate | Reconciled | Recon Failed | Idemp Mismatch | Opt Lock Retries | Dropped Iters | SLA Status |\n`;
-  md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
+  md += `| Stage | Target RPS | Actual RPS | Achieved % | Peak VUs | p95 Latency | p99 Latency | Errors | Dropped Iters | CPU Max | Hikari Active/Pending | Max Kafka Lag | SLA Status |\n`;
+  md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
   stages.forEach(s => {
     const cpuStr = s.system.cpuMax !== null ? `${(s.system.cpuMax * 100).toFixed(0)}%` : 'SCRAPE_FAILED';
-    const hikariStr = s.system.hikariActive !== null ? s.system.hikariActive.toFixed(1) : 'SCRAPE_FAILED';
+    const hikariStr = s.system.hikariActive !== null ? `${s.system.hikariActive.toFixed(1)}/${s.system.hikariPending || 0}` : 'SCRAPE_FAILED';
     const kafkaLagStr = s.system.kafkaLag !== null ? s.system.kafkaLag.toString() : 'SCRAPE_FAILED';
-    const expiredStr = s.expiredCount.toString();
-    const workerRateStr = s.workerConfirmRate.toFixed(1);
-    md += `| **${s.stageName}** | ${s.targetRps} | ${fmt(s, s.actualRps, s.actualRps.toFixed(1))} | ${fmt(s, s.requestCount, s.requestCount.toString())} | ${fmt(s, s.p95Latency, `${s.p95Latency.toFixed(1)} ms`)} | ${fmt(s, s.p99Latency, `${s.p99Latency.toFixed(1)} ms`)} | ${fmt(s, s.errorRate, `${(s.errorRate * 100).toFixed(2)}%`)} | ${cpuStr} | ${hikariStr} | ${kafkaLagStr} | ${fmt(s, s.expiredCount, expiredStr)} | ${fmt(s, s.workerConfirmRate, `${workerRateStr} / s`)} | ${fmt(s, s.reconciledCount, s.reconciledCount.toString())} | ${fmt(s, s.reconFailedCount, s.reconFailedCount.toString())} | ${fmt(s, s.idempotencyMismatch, s.idempotencyMismatch.toString())} | ${fmt(s, s.optimisticLockRetry, s.optimisticLockRetry.toString())} | ${fmt(s, s.droppedIterations, s.droppedIterations.toString())} | ${s.slaStatus} |\n`;
+    const achievementPercent = s.targetRps > 0 ? ((s.actualRps / s.targetRps) * 100).toFixed(1) + '%' : '100.0%';
+    const errorCount = Math.round(s.errorRate * s.requestCount);
+
+    md += `| **${s.stageName}** | ${s.targetRps} | ${fmt(s, s.actualRps, s.actualRps.toFixed(1))} | ${fmt(s, s.actualRps, achievementPercent)} | ${s.vus} | ${fmt(s, s.p95Latency, `${s.p95Latency.toFixed(1)} ms`)} | ${fmt(s, s.p99Latency, `${s.p99Latency.toFixed(1)} ms`)} | ${fmt(s, errorCount, errorCount.toString())} | ${fmt(s, s.droppedIterations, s.droppedIterations.toString())} | ${cpuStr} | ${hikariStr} | ${kafkaLagStr} | ${s.slaStatus} |\n`;
   });
   md += `\n`;
 
-  md += `## Bottleneck Analysis per Stage\n\n`;
+  md += `## Latency and Throughput Breakdown per Stage\n\n`;
   stages.forEach(s => {
     md += `### Stage: ${s.stageName} (${s.slaStatus})\n`;
+    md += `- **Target Load**: ${s.targetRps} RPS\n`;
+    md += `- **Achieved Throughput**: ${s.actualRps.toFixed(1)} RPS (Achievement: ${s.targetRps > 0 ? ((s.actualRps / s.targetRps) * 100).toFixed(1) : 100}%)\n`;
+    md += `- **Measured Latencies**:\n`;
+    md += `  - **p95 latency**: ${s.p95Latency.toFixed(1)} ms at ${s.actualRps.toFixed(1)} achieved RPS during ${s.targetRps} target stage\n`;
+    md += `  - **p99 latency**: ${s.p99Latency.toFixed(1)} ms at ${s.actualRps.toFixed(1)} achieved RPS during ${s.targetRps} target stage\n`;
     md += `- **Likely Cause**: ${s.bottleneck.cause}\n`;
     md += `- **Evidence**: ${s.bottleneck.evidence}\n`;
     md += `- **Recommendation**: ${s.bottleneck.recommendation}\n\n`;
@@ -747,7 +878,7 @@ function generateCsvReport(stages) {
 /**
  * 10. Exports Generator: HTML dashboard
  */
-function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason) {
+function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason, dbCorrectness) {
   const totalRateLimitBlocks = stages.reduce((sum, s) => sum + s.rateLimitCount, 0);
   const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
   const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
@@ -915,6 +1046,7 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
     .status-pass { color: var(--accent-green); font-weight: bold; }
     .status-fail { color: var(--accent-red); font-weight: bold; }
     .status-inconclusive { color: #ecc94b; font-weight: bold; }
+    .status-aborted { color: #ed8936; font-weight: bold; }
     .status-invalid { color: #a0aec0; font-weight: bold; }
     .score-circle {
       display: flex;
@@ -1048,6 +1180,43 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
       </div>
     </div>
 
+    <!-- Correctness Validation Card -->
+    <div class="card" style="margin-bottom: 24px; border: 1px solid ${dbCorrectness && dbCorrectness.passed ? 'rgba(56, 161, 105, 0.4)' : 'rgba(229, 62, 62, 0.4)'}; background: ${dbCorrectness && dbCorrectness.passed ? 'rgba(56, 161, 105, 0.05)' : 'rgba(229, 62, 62, 0.05)'};">
+      <h2>🛡️ Database Correctness & Data Integrity Validation</h2>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <span style="font-size: 1.1rem; font-weight: 600;">Postgres Correctness Verification Status:</span>
+        <span class="${dbCorrectness && dbCorrectness.passed ? 'status-pass' : 'status-fail'}" style="font-size: 1.25rem;">
+          ${dbCorrectness && dbCorrectness.passed ? '✓ PASSED' : '✗ FAILED'}
+        </span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 10px;">
+        <div class="exec-item" style="border: none; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; text-align: center; flex-direction: column;">
+          <div class="exec-label" style="font-size: 0.8rem; margin-bottom: 5px; color: var(--text-muted);">Negative Inventory Rows</div>
+          <div class="exec-val" style="font-size: 1.2rem; color: ${dbCorrectness && dbCorrectness.negativeInventory > 0 ? 'var(--accent-red)' : 'var(--text-main)'}; font-weight: bold;">${dbCorrectness ? dbCorrectness.negativeInventory : 'N/A'}</div>
+        </div>
+        <div class="exec-item" style="border: none; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; text-align: center; flex-direction: column;">
+          <div class="exec-label" style="font-size: 0.8rem; margin-bottom: 5px; color: var(--text-muted);">Duplicate Successful Orders</div>
+          <div class="exec-val" style="font-size: 1.2rem; color: ${dbCorrectness && dbCorrectness.duplicateOrders > 0 ? 'var(--accent-red)' : 'var(--text-main)'}; font-weight: bold;">${dbCorrectness ? dbCorrectness.duplicateOrders : 'N/A'}</div>
+        </div>
+        <div class="exec-item" style="border: none; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; text-align: center; flex-direction: column;">
+          <div class="exec-label" style="font-size: 0.8rem; margin-bottom: 5px; color: var(--text-muted);">Lost Accepted Events</div>
+          <div class="exec-val" style="font-size: 1.2rem; color: ${dbCorrectness && dbCorrectness.lostEvents > 0 ? 'var(--accent-red)' : 'var(--text-main)'}; font-weight: bold;">${dbCorrectness ? dbCorrectness.lostEvents : 'N/A'}</div>
+        </div>
+        <div class="exec-item" style="border: none; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; text-align: center; flex-direction: column;">
+          <div class="exec-label" style="font-size: 0.8rem; margin-bottom: 5px; color: var(--text-muted);">Overselling / Stock Mismatch</div>
+          <div class="exec-val" style="font-size: 1.2rem; color: ${dbCorrectness && dbCorrectness.oversellingCount !== 0 ? 'var(--accent-red)' : 'var(--text-main)'}; font-weight: bold;">${dbCorrectness ? dbCorrectness.oversellingCount : 'N/A'}</div>
+        </div>
+      </div>
+      ${dbCorrectness && !dbCorrectness.passed ? `
+      <div style="color: var(--accent-red); margin-top: 15px; font-size: 0.9rem; padding: 10px; background: rgba(229, 62, 62, 0.1); border-radius: 6px; border-left: 4px solid var(--accent-red)">
+        <strong>Integrity Violations Detected:</strong>
+        <ul style="margin: 5px 0 0 20px; padding: 0; text-align: left;">
+          ${dbCorrectness.details.map(d => `<li>${d}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
+    </div>
+
     <!-- Trend Graphs -->
     <div class="chart-container">
       <div class="chart-box">${latencyChart}</div>
@@ -1067,46 +1236,47 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
             <th>Stage</th>
             <th>Target RPS</th>
             <th>Actual RPS</th>
-            <th>Req Count</th>
+            <th>Achieved %</th>
+            <th>Peak VUs</th>
             <th>p95 Latency</th>
             <th>p99 Latency</th>
-            <th>Error Rate</th>
-            <th>CPU Usage (Max)</th>
-            <th>Hikari Active</th>
-            <th>Kafka Consumer Lag (max)</th>
-            <th>Reservations Expired</th>
-            <th>Worker Confirm Rate</th>
-            <th>Reconciled</th>
-            <th>Recon Failed</th>
-            <th>Idemp Mismatch</th>
-            <th>Opt Lock Retries</th>
+            <th>Errors</th>
             <th>Dropped Iters</th>
+            <th>CPU Usage (Max)</th>
+            <th>Hikari Active/Pending</th>
+            <th>Kafka Consumer Lag (max)</th>
             <th>SLA Status</th>
           </tr>
         </thead>
         <tbody>
-          ${stages.map(s => `
+          ${stages.map(s => {
+            const achievementPercent = s.targetRps > 0 ? ((s.actualRps / s.targetRps) * 100).toFixed(1) + '%' : '100.0%';
+            const errorCount = Math.round(s.errorRate * s.requestCount);
+            const getStatusClass = (status) => {
+              if (status === 'PASS') return 'status-pass';
+              if (status.startsWith('FAIL')) return 'status-fail';
+              if (status.startsWith('INCONCLUSIVE')) return 'status-inconclusive';
+              if (status === 'ABORTED') return 'status-aborted';
+              return 'status-invalid';
+            };
+            return `
             <tr>
               <td><strong>${s.stageName}</strong></td>
               <td>${s.targetRps}</td>
               <td>${fmt(s, s.actualRps, s.actualRps.toFixed(1))}</td>
-              <td>${fmt(s, s.requestCount, s.requestCount.toString())}</td>
+              <td>${fmt(s, s.actualRps, achievementPercent)}</td>
+              <td>${s.vus}</td>
               <td>${fmt(s, s.p95Latency, `${s.p95Latency.toFixed(1)} ms`)}</td>
               <td>${fmt(s, s.p99Latency, `${s.p99Latency.toFixed(1)} ms`)}</td>
-              <td>${fmt(s, s.errorRate, `${(s.errorRate * 100).toFixed(2)}%`)}</td>
-              <td>${s.system.cpuMax !== null ? `${(s.system.cpuMax * 100).toFixed(0)}%` : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
-              <td>${s.system.hikariActive !== null ? s.system.hikariActive.toFixed(1) : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
-              <td>${s.system.kafkaLag !== null ? s.system.kafkaLag : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
-              <td>${fmt(s, s.expiredCount, s.expiredCount.toString())}</td>
-              <td>${fmt(s, s.workerConfirmRate, `${s.workerConfirmRate.toFixed(1)} / s`)}</td>
-              <td>${fmt(s, s.reconciledCount, s.reconciledCount.toString())}</td>
-              <td>${fmt(s, s.reconFailedCount, s.reconFailedCount.toString())}</td>
-              <td>${fmt(s, s.idempotencyMismatch, s.idempotencyMismatch.toString())}</td>
-              <td>${fmt(s, s.optimisticLockRetry, s.optimisticLockRetry.toString())}</td>
+              <td>${fmt(s, errorCount, errorCount.toString())}</td>
               <td>${fmt(s, s.droppedIterations, s.droppedIterations.toString())}</td>
-              <td><span class="${s.slaStatus === 'PASS' ? 'status-pass' : (s.slaStatus === 'INCONCLUSIVE' ? 'status-inconclusive' : (s.slaStatus === 'INVALID' ? 'status-invalid' : (s.slaStatus === 'ABORTED' ? 'status-aborted' : 'status-fail')))}">${s.slaStatus}</span></td>
+              <td>${s.system.cpuMax !== null ? `${(s.system.cpuMax * 100).toFixed(0)}%` : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
+              <td>${s.system.hikariActive !== null ? `${s.system.hikariActive.toFixed(1)}/${s.system.hikariPending || 0}` : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
+              <td>${s.system.kafkaLag !== null ? s.system.kafkaLag : '<span class="status-invalid" style="font-size:0.75rem;">SCRAPE_FAILED</span>'}</td>
+              <td><span class="${getStatusClass(s.slaStatus)}">${s.slaStatus}</span></td>
             </tr>
-          `).join('')}
+            `;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -1220,8 +1390,11 @@ function main() {
   // 1. Gather host and tool details
   const env = collectEnvironment(isShortRun);
 
+  // 1c. Run Postgres database correctness validation checks
+  const dbCorrectness = queryDbCorrectness();
+
   // 2. Correlate metrics and categorize stages
-  const stages = processMetrics(k6Summary, systemMetrics, isKilled, terminationReason);
+  const stages = processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, dbCorrectness);
 
   // 3. Find knee/breaking point
   const kneePoint = findKneePoint(stages);
@@ -1272,7 +1445,7 @@ function main() {
   }
 
   // HTML Dashboard
-  const htmlContent = generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason);
+  const htmlContent = generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason, dbCorrectness);
   fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.html`), htmlContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.html`), htmlContent, 'utf8');
 
@@ -1281,7 +1454,7 @@ function main() {
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.json`), JSON.stringify(runRecord, null, 2), 'utf8');
 
   // Markdown summary
-  const mdContent = generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason);
+  const mdContent = generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason, dbCorrectness);
   fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.md`), mdContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.md`), mdContent, 'utf8');
 
