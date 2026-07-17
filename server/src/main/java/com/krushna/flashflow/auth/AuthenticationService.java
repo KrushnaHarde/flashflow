@@ -214,6 +214,24 @@ public class AuthenticationService {
             }
         });
 
+        // Pipeline user enablement keys to Redis to avoid load test DB cache-miss lookups
+        try {
+            stringRedisTemplate.executePipelined(new org.springframework.data.redis.core.SessionCallback<Object>() {
+                @Override
+                public <K, V> Object execute(org.springframework.data.redis.core.RedisOperations<K, V> operations) throws org.springframework.dao.DataAccessException {
+                    org.springframework.data.redis.core.RedisOperations<String, String> ops = (org.springframework.data.redis.core.RedisOperations<String, String>) operations;
+                    for (UUID userId : userIds) {
+                        String key = "user:" + userId + ":enabled";
+                        ops.opsForValue().set(key, "true", 3600, java.util.concurrent.TimeUnit.SECONDS);
+                    }
+                    return null;
+                }
+            });
+        } catch (Exception e) {
+            log.error("Failed to pipeline user enablement status to Redis", e);
+            throw e;
+        }
+
         // Generate tokens
         for (int i = 0; i < count; i++) {
             UUID userId = userIds.get(i);
