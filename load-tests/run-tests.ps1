@@ -105,6 +105,7 @@ $k6Args += $ScriptFile
 
 Write-Host "Command: k6 $($k6Args -join ' ')" -ForegroundColor Gray
 & k6 $k6Args
+$env:K6_EXIT_CODE = $LASTEXITCODE
 
 # 7. Stop metrics collector and wait for file persistence
 Write-Host "Stopping background metrics collector..." -ForegroundColor Gray
