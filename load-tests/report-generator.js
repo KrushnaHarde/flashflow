@@ -180,19 +180,19 @@ function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, d
   
   // Stage duration configurations
   const shortRunDurations = {
-    '500_rps': 15, '1k_rps': 15, '2k_rps': 15, '5k_rps': 15, '7.5k_rps': 15, '10k_rps': 15, '15k_rps': 15, '20k_rps': 15
+    '500_rps': 15, '1k_rps': 15, '2k_rps': 15, '5k_rps': 15, '7_5k_rps': 15, '10k_rps': 15, '15k_rps': 15, '20k_rps': 15
   };
   const fullRunDurations = {
-    '500_rps': 150, '1k_rps': 240, '2k_rps': 240, '5k_rps': 240, '7.5k_rps': 240, '10k_rps': 240, '15k_rps': 240, '20k_rps': 240
+    '500_rps': 150, '1k_rps': 240, '2k_rps': 240, '5k_rps': 240, '7_5k_rps': 240, '10k_rps': 240, '15k_rps': 240, '20k_rps': 240
   };
   const durations = isShortRun ? shortRunDurations : fullRunDurations;
 
   const targetRpsMap = {
-    '500_rps': 500, '1k_rps': 1000, '2k_rps': 2000, '5k_rps': 5000, '7.5k_rps': 7500, '10k_rps': 10000, '15k_rps': 15000, '20k_rps': 20000
+    '500_rps': 500, '1k_rps': 1000, '2k_rps': 2000, '5k_rps': 5000, '7_5k_rps': 7500, '10k_rps': 10000, '15k_rps': 15000, '20k_rps': 20000
   };
   
   const vuAllocationMap = {
-    '500_rps': 500, '1k_rps': 1000, '2k_rps': 1500, '5k_rps': 2500, '7.5k_rps': 3000, '10k_rps': 4000, '15k_rps': 5000, '20k_rps': 6000
+    '500_rps': 500, '1k_rps': 1000, '2k_rps': 1500, '5k_rps': 2500, '7_5k_rps': 3000, '10k_rps': 4000, '15k_rps': 5000, '20k_rps': 6000
   };
 
   const stagesList = Object.keys(durations);

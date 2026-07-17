@@ -53,7 +53,7 @@ export const STAGES = [
   { name: '1k_rps', target: 1000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 200, maxVUs: 1000 },
   { name: '2k_rps', target: 2000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 300, maxVUs: 1500 },
   { name: '5k_rps', target: 5000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 500, maxVUs: 2500 },
-  { name: '7.5k_rps', target: 7500, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 600, maxVUs: 3000 },
+  { name: '7_5k_rps', target: 7500, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 600, maxVUs: 3000 },
   { name: '10k_rps', target: 10000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 800, maxVUs: 4000 },
   { name: '15k_rps', target: 15000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 1000, maxVUs: 5000 },
   { name: '20k_rps', target: 20000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 1200, maxVUs: 6000 }
