@@ -49,13 +49,14 @@ export const ENDPOINTS = [
 // Maximum Safe VU allocation: 5120MB / 3.0MB = 1706 VUs.
 // We configure the largest stage (10k_rps) to cap at 1500 maxVUs (requiring ~4.5GB peak memory), which keeps peak usage safely under our limits.
 export const STAGES = [
-  { name: '1_rps', target: 1, durationRamp: '30s', durationHold: '1m', preAllocatedVUs: 1, maxVUs: 5 },
-  { name: '10_rps', target: 10, durationRamp: '30s', durationHold: '1m', preAllocatedVUs: 2, maxVUs: 10 },
-  { name: '100_rps', target: 100, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 20, maxVUs: 50 },
-  { name: '500_rps', target: 500, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 50, maxVUs: 150 },
-  { name: '1k_rps', target: 1000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 100, maxVUs: 300 },
-  { name: '5k_rps', target: 5000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 300, maxVUs: 1000 },
-  { name: '10k_rps', target: 10000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 500, maxVUs: 1500 },
+  { name: '500_rps', target: 500, durationRamp: '30s', durationHold: '2m', preAllocatedVUs: 100, maxVUs: 500 },
+  { name: '1k_rps', target: 1000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 200, maxVUs: 1000 },
+  { name: '2k_rps', target: 2000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 300, maxVUs: 1500 },
+  { name: '5k_rps', target: 5000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 500, maxVUs: 2500 },
+  { name: '7.5k_rps', target: 7500, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 600, maxVUs: 3000 },
+  { name: '10k_rps', target: 10000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 800, maxVUs: 4000 },
+  { name: '15k_rps', target: 15000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 1000, maxVUs: 5000 },
+  { name: '20k_rps', target: 20000, durationRamp: '1m', durationHold: '3m', preAllocatedVUs: 1200, maxVUs: 6000 }
 ];
 
 // Helper to determine if we are running a short debugging test
