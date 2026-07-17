@@ -10,6 +10,28 @@ if (Test-Path $flagPath) { Remove-Item $flagPath -Force }
 
 $metrics = [System.Collections.Generic.List[PSObject]]::new()
 
+# Startup reachability verification check
+Write-Host "[Collector] Performing startup check against ${BaseUrl}..." -ForegroundColor Cyan
+$endpointsToCheck = @(
+    "/actuator/health",
+    "/actuator/metrics/system.cpu.usage"
+)
+
+foreach ($endpoint in $endpointsToCheck) {
+    $url = "${BaseUrl}${endpoint}"
+    try {
+        $res = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+        if ($res.StatusCode -ne 200) {
+            Write-Error "[Collector] ERROR: Startup check failed. Endpoint $url returned status $($res.StatusCode)"
+            exit 1
+        }
+    } catch {
+        Write-Error "[Collector] ERROR: Startup check failed. Cannot reach $url. Error: $_"
+        exit 1
+    }
+}
+Write-Host "[Collector] Startup check passed successfully." -ForegroundColor Green
+
 Write-Host "[Collector] Starting background system performance monitoring loop against ${BaseUrl}..." -ForegroundColor Cyan
 
 while (-not (Test-Path $flagPath)) {
@@ -78,59 +100,30 @@ while (-not (Test-Path $flagPath)) {
         Write-Warning "Failed to scrape hikaricp.connections.pending: $_"
     }
 
-    # 7. Kafka Consumer Lag Maximum
+    # 7. Kafka Consumer Lag
     $kafkaLag = $null
     try {
-        # 7a. Query remote metrics endpoint
-        $res = Invoke-RestMethod -Uri "${BaseUrl}/api/v1/metrics/kafka-lag" -TimeoutSec 1
-        if ($res -and $res.maxLag -ne $null) {
-            $kafkaLag = $res.maxLag
+        # 7a. Query custom Micrometer gauge for Kafka consumer lag via Actuator
+        $res = Invoke-RestMethod -Uri "${BaseUrl}/actuator/metrics/kafka.consumer.lag" -TimeoutSec 1
+        if ($res.measurements) {
+            $kafkaLag = $res.measurements[0].value
         }
     } catch {
-        # 7b. Fallback to local Docker checks only if localhost
-        if ($BaseUrl -match "localhost" -or $BaseUrl -match "127.0.0.1") {
+        try {
+            # 7b. Fallback to remote JSON endpoint
+            $res = Invoke-RestMethod -Uri "${BaseUrl}/api/v1/metrics/kafka-lag" -TimeoutSec 1
+            if ($res -and $res.maxLag -ne $null) {
+                $kafkaLag = $res.maxLag
+            }
+        } catch {
             try {
-                $groupName = "flashflow-group"
-                try {
-                    $activeGroups = docker exec flashflow-kafka kafka-consumer-groups --bootstrap-server localhost:9092 --list 2>$null
-                    $matchedGroup = $activeGroups | Where-Object { $_ -match "flashflow-group" } | Select-Object -First 1
-                    if ($matchedGroup) { $groupName = $matchedGroup.Trim() }
-                } catch {}
-
-                $lagOutput = docker exec flashflow-kafka kafka-consumer-groups --bootstrap-server localhost:9092 --describe --group $groupName 2>$null
-                if ($lagOutput) {
-                    $maxLagVal = 0
-                    $foundGroup = $false
-                    foreach ($line in $lagOutput) {
-                        if ($line -match "flashflow-group") {
-                            $foundGroup = $true
-                            $tokens = $line -split "\s+"
-                            if ($tokens.Count -ge 6) {
-                                $lagStr = $tokens[5]
-                                if ($lagStr -as [int]) {
-                                    $lagVal = [int]$lagStr
-                                    if ($lagVal -gt $maxLagVal) { $maxLagVal = $lagVal }
-                                }
-                            }
-                        }
-                    }
-                    if ($foundGroup) {
-                        $kafkaLag = $maxLagVal
-                    }
-                }
+                # 7c. Fallback to standard spring kafka metric
+                $res = Invoke-RestMethod -Uri "${BaseUrl}/actuator/metrics/kafka.consumer.fetch.manager.records.lag.max" -TimeoutSec 1
+                if ($res.measurements) { $kafkaLag = $res.measurements[0].value }
             } catch {}
         }
     }
-
-    # 7c. Final fallback to Standard Actuator Metric
-    if ($kafkaLag -eq $null) {
-        try {
-            $res = Invoke-RestMethod -Uri "${BaseUrl}/actuator/metrics/kafka.consumer.fetch.manager.records.lag.max" -TimeoutSec 1
-            if ($res.measurements) { $kafkaLag = $res.measurements[0].value }
-        } catch {
-            Write-Warning "Failed to scrape Actuator kafka consumer lag: $_"
-        }
-    }
+    if ($kafkaLag -eq $null) { $kafkaLag = 0 }
 
     # 7.5 Expired Reservations Count
     $reservationsExpired = $null
