@@ -51,6 +51,12 @@ fi
 
 # 3. Handle configuration messages
 export BASE_URL
+export CAPACITY_MODE="false"
+if [[ "$SCENARIO" = "ramp" || "$SCENARIO" = "spike" ]]; then
+    export CAPACITY_MODE="true"
+fi
+echo "Capacity Testing Mode: $CAPACITY_MODE"
+
 if [[ "$SHORT_RUN" = true ]]; then
     export SHORT_RUN=true
     echo "=== SHORT RUN ENABLED ==="
@@ -77,7 +83,11 @@ MEM_PER_VU_MB=3
 MAX_VUS=1 # Default for smoke
 
 if [[ "$SCENARIO" = "ramp" ]]; then
-    MAX_VUS=1500
+    if [[ "$SHORT_RUN" = true ]]; then
+        MAX_VUS=1200
+    else
+        MAX_VUS=6000
+    fi
 elif [[ "$SCENARIO" = "spike" ]]; then
     if [[ "$SHORT_RUN" = true ]]; then
         MAX_VUS=300
@@ -210,7 +220,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 # 7. Run the k6 command
-K6_ARGS=("run" "--env" "BASE_URL=$BASE_URL")
+K6_ARGS=("run" "--env" "BASE_URL=$BASE_URL" "--env" "CAPACITY_MODE=$CAPACITY_MODE")
 if [[ "$SHORT_RUN" = true ]]; then
     K6_ARGS+=("--env" "SHORT_RUN=true")
 fi
