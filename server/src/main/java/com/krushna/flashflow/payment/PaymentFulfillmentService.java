@@ -140,13 +140,10 @@ public class PaymentFulfillmentService {
                 reservationRepository.save(reservation);
                 log.info("Reservation {} status updated to CANCELLED", reservationId);
 
-                // Release stock in DB: availableStock += qty, totalStock += qty (reservedStock: DO NOT TOUCH)
-                Inventory inventory = inventoryRepository.findById(dbOrder.getProductId()).orElse(null);
-                if (inventory != null) {
-                    inventory.setAvailableStock(inventory.getAvailableStock() + dbOrder.getQuantity());
-                    inventory.setTotalStock(inventory.getTotalStock() + dbOrder.getQuantity());
-                    inventoryRepository.save(inventory);
-                    log.info("Released stock in DB for product: {}. Increased availableStock and totalStock by {}", 
+                // Release stock atomically in DB: availableStock += qty, totalStock += qty (reservedStock: DO NOT TOUCH)
+                int updated = inventoryRepository.incrementStock(dbOrder.getProductId(), dbOrder.getQuantity());
+                if (updated > 0) {
+                    log.info("Released stock atomically in DB for product: {}. Increased availableStock and totalStock by {}", 
                             dbOrder.getProductId(), dbOrder.getQuantity());
 
                     // Sync to Redis post-commit
@@ -158,7 +155,10 @@ public class PaymentFulfillmentService {
                             public void afterCommit() {
                                 log.info("Fulfillment failed transaction committed. Syncing releases to Redis...");
                                 try {
-                                    redisInventoryService.setStock(dbOrder.getProductId(), inventory.getAvailableStock());
+                                    Inventory updatedInv = inventoryRepository.findById(dbOrder.getProductId()).orElse(null);
+                                    if (updatedInv != null) {
+                                        redisInventoryService.setStock(dbOrder.getProductId(), updatedInv.getAvailableStock());
+                                    }
                                     redisReservationService.saveReservation(reservationId, ReservationStatus.CANCELLED.name(), 300L);
                                     
                                     if (finalIdempotency != null && finalResponseJson != null) {
