@@ -174,7 +174,7 @@ function queryDbCorrectness() {
 /**
  * 2. Process metrics & correlate by stage
  */
-function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, dbCorrectness) {
+function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, dbCorrectness, isSetupFailed, setupFailureReason) {
   const metrics = k6Summary.metrics || {};
   const isShortRun = (k6Summary.state && k6Summary.state.testRunDurationMs < 300000) || (process.env.SHORT_RUN === 'true');
   
@@ -319,7 +319,10 @@ function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, d
     let isAborted = false;
     let abortReason = "";
     if (isKilled) {
-      if (index > lastActiveIndex) {
+      if (isSetupFailed) {
+        isAborted = true;
+        abortReason = setupFailureReason || "Test aborted during setup/preflight";
+      } else if (index > lastActiveIndex) {
         isAborted = true;
         if (lastActiveIndex === -1 && index === 0) {
           abortReason = terminationReason ? `Process terminated during setup/startup — ${terminationReason}` : "Process terminated during setup/startup — likely OOM";
@@ -335,10 +338,17 @@ function processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, d
     const hasDroppedIterations = droppedIterations > 0 && (droppedIterations > (expectedRequests * 0.05));
 
     if (isAborted) {
-      slaStatus = 'ABORTED';
-      bottleneckCause = 'Load Generator Termination';
-      bottleneckEvidence = abortReason;
-      bottleneckRec = 'Check load generator memory headroom or VU ceilings; run with --max-vus-override capped to lower limits.';
+      if (isSetupFailed) {
+        slaStatus = 'ABORTED';
+        bottleneckCause = 'TEST ABORTED DURING SETUP/PREFLIGHT';
+        bottleneckEvidence = abortReason;
+        bottleneckRec = 'Fix the script configuration or verify target system accessibility/startup logs.';
+      } else {
+        slaStatus = 'ABORTED';
+        bottleneckCause = 'Load Generator Termination';
+        bottleneckEvidence = abortReason;
+        bottleneckRec = 'Check load generator memory headroom or VU ceilings; run with --max-vus-override capped to lower limits.';
+      }
     } else if (dbCorrectness && !dbCorrectness.passed && totalRequests > 0) {
       slaStatus = 'FAIL — CORRECTNESS';
       bottleneckCause = 'Database Correctness/Data-Integrity Violation';
@@ -771,7 +781,7 @@ function drawSvgChart(title, labels, values, type = 'line', threshold = null) {
 /**
  * 8. Exports Generator: Markdown
  */
-function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason, dbCorrectness) {
+function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason, dbCorrectness, isSetupFailed, setupFailureReason) {
   const totalRateLimitBlocks = stages.reduce((sum, s) => sum + s.rateLimitCount, 0);
   const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
   const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
@@ -783,7 +793,9 @@ function generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, t
   const stoppedStageName = stoppedStage ? stoppedStage.stageName : 'setup';
 
   let md = `# Executive Performance Report: FlashFlow Stress Capacity\n\n`;
-  if (isKilled) {
+  if (isSetupFailed) {
+    md += `> [!CAUTION]\n> ## **TEST ABORTED DURING SETUP/PREFLIGHT**\n> **The load test failed to start due to a setup/preflight error.**\n> **Failure Reason**: ${setupFailureReason || 'Unknown setup error'}\n\n`;
+  } else if (isKilled) {
     md += `> [!CAUTION]\n> **This run did not complete all stages; results below reflect only stages that finished before termination (stopped at stage: ${stoppedStageName}).**\n> (Reason: ${terminationReason || 'Unknown'})\n\n`;
   }
   md += `## Executive Summary\n\n`;
@@ -878,7 +890,7 @@ function generateCsvReport(stages) {
 /**
  * 10. Exports Generator: HTML dashboard
  */
-function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason, dbCorrectness) {
+function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason, dbCorrectness, isSetupFailed, setupFailureReason) {
   const totalRateLimitBlocks = stages.reduce((sum, s) => sum + s.rateLimitCount, 0);
   const totalRequests = stages.reduce((sum, s) => sum + s.requestCount, 0);
   const rateLimitPercent = totalRequests > 0 ? ((totalRateLimitBlocks / totalRequests) * 100).toFixed(2) : '0.00';
@@ -1133,11 +1145,19 @@ function generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, is
       <div class="timestamp">Test Run Executed on: ${new Date().toLocaleString()}</div>
     </header>
 
-    ${isKilled ? `
+    ${isSetupFailed ? `
+      <div style="background: rgba(229, 62, 62, 0.25); border: 2px solid rgba(229, 62, 62, 0.6); border-radius: 12px; padding: 20px; margin-bottom: 20px; color: #f56565; font-weight: bold; font-size: 1.2rem; text-align: center;">
+        🛑 TEST ABORTED DURING SETUP/PREFLIGHT<br/>
+        <span style="font-size: 0.95rem; font-weight: normal; color: var(--text-main); display: block; margin-top: 10px; text-align: left; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+          <strong>Failure Reason:</strong><br/>
+          ${setupFailureReason.replace(/\n/g, '<br/>')}
+        </span>
+      </div>
+    ` : (isKilled ? `
       <div style="background: rgba(229, 62, 62, 0.15); border: 1px solid rgba(229, 62, 62, 0.3); border-radius: 12px; padding: 15px; margin-bottom: 20px; color: #f56565; font-weight: bold; font-size: 1.1rem; text-align: center;">
         🛑 This run did not complete — results below reflect only stages that finished before termination (stopped at stage: ${stoppedStageName}). Reason: ${terminationReason || 'Unknown'}
       </div>
-    ` : ''}
+    ` : '')}
 
     ${env.execution.includes('Local') ? `
       <div style="background: rgba(217, 119, 6, 0.15); border: 1px solid rgba(217, 119, 6, 0.3); border-radius: 12px; padding: 15px; margin-bottom: 20px; color: #ecc94b; font-size: 0.9rem;">
@@ -1341,11 +1361,26 @@ function main() {
   const K6_EXIT_CODE = process.env.K6_EXIT_CODE ? parseInt(process.env.K6_EXIT_CODE, 10) : 0;
   let isKilled = K6_EXIT_CODE !== 0;
   let terminationReason = "";
+  let isSetupFailed = false;
+  let setupFailureReason = "";
 
   const k6LogPath = path.join(__dirname, 'k6_run.log');
   if (fs.existsSync(k6LogPath)) {
     const logContent = fs.readFileSync(k6LogPath, 'utf8');
-    if (/oom|killed|exit status 137|out of memory/i.test(logContent)) {
+
+    // Check if configuration has errors or setup failed
+    const configErrorMatch = logContent.match(/level=error\s+msg="([^"]+)"/i) || logContent.match(/Error:\s+([^\n]+)/i);
+    const setupErrorMatch = logContent.match(/GoError:\s+([^\n]+)/i) || logContent.match(/Error in setup\(\):?\s+([^\n]+)/i) || logContent.match(/([^\n]*Assertion Failed[^\n]*)/i) || logContent.match(/errored at line \d+:\s*([^\n]+)/i);
+
+    if (configErrorMatch) {
+      isKilled = true;
+      isSetupFailed = true;
+      setupFailureReason = configErrorMatch[1].trim().replace(/\\n/g, ' ').replace(/\\t/g, ' ');
+    } else if (setupErrorMatch) {
+      isKilled = true;
+      isSetupFailed = true;
+      setupFailureReason = setupErrorMatch[1].trim();
+    } else if (/oom|killed|exit status 137|out of memory/i.test(logContent)) {
       isKilled = true;
       terminationReason = "OOM killed";
     } else if (/panic/i.test(logContent)) {
@@ -1394,7 +1429,7 @@ function main() {
   const dbCorrectness = queryDbCorrectness();
 
   // 2. Correlate metrics and categorize stages
-  const stages = processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, dbCorrectness);
+  const stages = processMetrics(k6Summary, systemMetrics, isKilled, terminationReason, dbCorrectness, isSetupFailed, setupFailureReason);
 
   // 3. Find knee/breaking point
   const kneePoint = findKneePoint(stages);
@@ -1445,7 +1480,7 @@ function main() {
   }
 
   // HTML Dashboard
-  const htmlContent = generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason, dbCorrectness);
+  const htmlContent = generateHtmlReport(env, stages, score, kneePoint, recs, historyComp, isKilled, terminationReason, dbCorrectness, isSetupFailed, setupFailureReason);
   fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.html`), htmlContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.html`), htmlContent, 'utf8');
 
@@ -1454,7 +1489,7 @@ function main() {
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.json`), JSON.stringify(runRecord, null, 2), 'utf8');
 
   // Markdown summary
-  const mdContent = generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason, dbCorrectness);
+  const mdContent = generateMarkdownReport(env, stages, score, kneePoint, recs, isKilled, terminationReason, dbCorrectness, isSetupFailed, setupFailureReason);
   fs.writeFileSync(path.join(WORKSPACE_DIR, `summary_${scenario}_${timestampStr}.md`), mdContent, 'utf8');
   fs.writeFileSync(path.join(REPORTS_DIR, `run_${timestamp}.md`), mdContent, 'utf8');
 

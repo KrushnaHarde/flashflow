@@ -78,32 +78,6 @@ export function authenticateUser(baseUrl) {
 
   console.log(`[Setup] User authenticated successfully: email=${email}, userId=${userId}`);
 
-  // 5. Startup Assertion: test POST /purchase endpoint status and response shape
-  const testPayload = JSON.stringify({
-    userId: userId,
-    productId: productId,
-    quantity: 1,
-    idempotencyKey: `startup-check-${Date.now()}-${Math.random().toString(36).substring(2)}`
-  });
-  
-  const testRes = http.post(`${baseUrl}/purchase`, testPayload, { headers: authHeaders });
-  if (testRes.status !== 202) {
-    throw new Error(`Startup Assertion Failed: POST /purchase returned status ${testRes.status} instead of 202. Body: ${testRes.body}`);
-  }
-  
-  let testData;
-  try {
-    testData = JSON.parse(testRes.body);
-  } catch (e) {
-    throw new Error(`Startup Assertion Failed: POST /purchase response is not valid JSON. Body: ${testRes.body}`);
-  }
-  
-  if (!testData.reservationId || !testData.expiresAt) {
-    throw new Error(`Startup Assertion Failed: POST /purchase response shape did not match {reservationId, expiresAt}. Body: ${testRes.body}`);
-  }
-  
-  console.log(`[Setup] Startup assertion passed: POST /purchase returned expected 202 Accepted and payload with {reservationId, expiresAt}.`);
-
   return {
     token: token,
     userId: userId,

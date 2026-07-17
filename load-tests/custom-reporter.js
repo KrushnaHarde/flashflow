@@ -175,7 +175,10 @@ function generateConsoleTextReport(matrix, breakdownStage) {
   }
   output += '='.repeat(116) + '\n';
   
-  if (breakdownStage) {
+  const overallRequests = matrix.reduce((sum, r) => sum + r.totalRequests, 0);
+  if (overallRequests === 0) {
+    output += `\n[!] TEST ABORTED DURING SETUP/PREFLIGHT: No test requests were executed. Check console logs and setup() exception trace.\n\n`;
+  } else if (breakdownStage) {
     output += `\n[!] SLA BREACH DETECTED: System breaks down at ${breakdownStage.targetRps} req/s (Stage: ${breakdownStage.name})\n`;
     output += `    Reason: ${breakdownStage.reason}\n\n`;
   } else {
