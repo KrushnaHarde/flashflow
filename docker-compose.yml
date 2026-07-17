@@ -1,22 +1,22 @@
 version: '3.8'
 
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: flashflow-postgres
-    environment:
-      POSTGRES_DB: flashflow
-      POSTGRES_USER: ${SPRING_DATASOURCE_USERNAME:-postgres}
-      POSTGRES_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-postgres}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d flashflow"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+#   postgres:
+#     image: postgres:15-alpine
+#     container_name: flashflow-postgres
+#     environment:
+#       POSTGRES_DB: flashflow
+#       POSTGRES_USER: ${SPRING_DATASOURCE_USERNAME:-postgres}
+#       POSTGRES_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-postgres}
+#     ports:
+#       - "5432:5432"
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     healthcheck:
+#       test: ["CMD-SHELL", "pg_isready -U postgres -d flashflow"]
+#       interval: 5s
+#       timeout: 5s
+#       retries: 5
 
   redis:
     image: redis:7-alpine
@@ -67,8 +67,6 @@ services:
       SPRING_REDIS_PORT: ${SPRING_REDIS_PORT}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${SPRING_KAFKA_BOOTSTRAP_SERVERS}
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -111,5 +109,5 @@ services:
       - sentinel
 
 volumes:
-  postgres_data:
+#   postgres_data:
   redis_data:
