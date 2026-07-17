@@ -20,7 +20,6 @@ import java.io.IOException;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
-    private final UserDetailsService userDetailsService;
 
     @Override
     protected void doFilterInternal(
@@ -39,7 +38,40 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             userEmail = jwtService.extractUsername(jwt);
             if (userEmail != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                UserDetails userDetails = this.userDetailsService.loadUserByUsername(userEmail);
+                String roleStr = jwtService.extractClaim(jwt, claims -> claims.get("role", String.class));
+                com.krushna.flashflow.auth.Role role = com.krushna.flashflow.auth.Role.USER;
+                if (roleStr != null) {
+                    try {
+                        role = com.krushna.flashflow.auth.Role.valueOf(roleStr);
+                    } catch (Exception e) {
+                        // fallback
+                    }
+                }
+                
+                String userIdStr = jwtService.extractClaim(jwt, claims -> claims.get("userId", String.class));
+                java.util.UUID userId = null;
+                if (userIdStr != null) {
+                    try {
+                        userId = java.util.UUID.fromString(userIdStr);
+                    } catch (Exception e) {
+                        // fallback
+                    }
+                }
+                
+                String name = jwtService.extractClaim(jwt, claims -> claims.get("name", String.class));
+                if (name == null) {
+                    name = "Lightweight User";
+                }
+                
+                com.krushna.flashflow.user.User userDetails = com.krushna.flashflow.user.User.builder()
+                        .userId(userId)
+                        .email(userEmail)
+                        .name(name)
+                        .role(role)
+                        .enabled(true)
+                        .password("")
+                        .build();
+
                 if (jwtService.isTokenValid(jwt, userDetails.getUsername())) {
                     UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
                             userDetails,
