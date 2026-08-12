@@ -128,5 +128,7 @@ For deep dives into particular architectural decisions and system strategies, re
 * [Architecture Design](docs/ARCHITECTURE.md)
 * [Checkout Workflow Sequence](docs/WORKFLOW.md)
 * [Resilience and Safety Nets](docs/RESILIENCE_STRATEGIES.md)
-* [Failure Recoveries and DLQs](docs/FAILURE_CONDITIONS.md)
+* [Failure Mechanisms, Handling & Recovery Report](docs/FAILURE_HANDLING_AND_RECOVERY_REPORT.md)
+* [Failure Conditions & Handlers Summary](docs/FAILURE_CONDITIONS.md)
+* [Redis & Kafka Technical Deep-Dive Report](docs/REDIS_KAFKA_REPORT.md)
 * [Performance and Throughput Matrix](docs/PERFORMANCE_REPORT.md)

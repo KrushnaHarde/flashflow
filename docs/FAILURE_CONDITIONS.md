@@ -1,5 +1,8 @@
 # Failure Conditions & Handling
 
+> [!NOTE]
+> For the comprehensive, deep-dive technical study covering Redis Sentinel, Kafka producer-consumer lifecycles, database contention, and future architectural improvements, see the full [Failure Handling & Recovery Report](FAILURE_HANDLING_AND_RECOVERY_REPORT.md).
+
 In a high-concurrency environment, failures are expected. FlashFlow is designed to degrade gracefully and recover consistency systematically.
 
 ## 1. Redis Failure
